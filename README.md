@@ -1,6 +1,6 @@
 # Timeline Canvas
 
-**Timeline Canvas** is an Obsidian plugin that generates **vertical timeline backgrounds** as scalable SVG images and places them on a Canvas. You lay out notes, cards, and media on top of a shared time axis—so events stay aligned by date while you organize the story however you want.
+**Timeline Canvas** is an Obsidian plugin that generates **vertical timeline backgrounds** as scalable SVG images and places them on a Canvas. You lay out notes, cards, and media on top of a shared time axis, so events stay aligned by date while you organize the story however you want.
 
 Use it for a single clean timeline, or for **several parallel tracks** (columns) so you can compare different streams of events on the same calendar.
 
@@ -14,7 +14,7 @@ This plugin draws the time axis for you:
 
 1. You choose a date range and how time is divided (months, years, custom periods, …).
 2. The plugin creates an SVG timeline and a Canvas that uses it as the background.
-3. You place normal Canvas cards on top—project notes, people, sources, images—aligned to the grid.
+3. You place normal Canvas cards on top.  Project notes, people, sources, images are still aligned to the grid.
 
 The background is a real vault file (SVG), so it stays sharp when you zoom and can be widened or edited later without starting over.
 
@@ -24,9 +24,9 @@ The background is a real vault file (SVG), so it stays sharp when you zoom and c
 
 ### Single timeline
 
-- **Project history** — milestones from kickoff to launch on one vertical spine  
-- **Biography or research log** — life events or source chronology  
-- **Course or reading plan** — weeks/semesters as the axis; notes as cards  
+- **Project history** - Milestones from kickoff to launch on one vertical spine  
+- **Biography or research log** - Life events or source chronology  
+- **Course or reading plan** - Weeks/semesters as the axis; notes as cards  
 
 ### Parallel timelines (columns)
 
@@ -39,7 +39,7 @@ Split the background into vertical bands so multiple sequences share the same da
 | Company / project | Funding rounds, releases |
 | Personal | Health, travel, study |
 
-You can see a family event *in the context of* the wider world, or a product launch *against* industry news—without juggling separate canvases.
+You can see a family event *in the context of* the wider world, or a product launch *against* industry news, without juggling separate canvases.
 
 ### Planning and review
 
@@ -81,8 +81,8 @@ A `.canvas` file opens with the SVG timeline at the back. Add cards from the Can
 
 Choose **Custom** when the axis is conceptual rather than calendar-based:
 
-- **Custom increment name** — e.g. `Semester`, `Phase`, `Chapter`  
-- **Number of occurrences** — how many equal bands between start and end  
+- **Custom increment name** - e.g. `Semester`, `Phase`, `Chapter`  
+- **Number of occurrences** - how many equal bands between start and end  
 
 Example: start `2025-01-01`, end `2025-12-31`, name `Semester`, count `4` → four labels (*Semester 1* … *Semester 4*) spaced evenly between the year boundaries.
 
@@ -98,8 +98,8 @@ With more than one column, dashed vertical dividers separate the tracks. Horizon
 
 ### Output location
 
-- **Output folder** — where the `.canvas` file is created (pre-filled from plugin settings; leave blank for vault root).  
-- **Browse** — pick an existing folder.  
+- **Output folder** - where the `.canvas` file is created (pre-filled from plugin settings; leave blank for vault root).  
+- **Browse** - pick an existing folder.  
 - Missing folders are created automatically.  
 - The **SVG** is written to the **default SVG folder** from Settings, or next to the canvas if that setting is empty.
 
@@ -127,7 +127,7 @@ Open a timeline `.canvas` file first (most of these only appear when a canvas is
 | Command | What it does |
 |---------|----------------|
 | **Create timeline canvas** | Open the create dialog (also on the ribbon) |
-| **Widen timeline background** | Regenerate a wider SVG; **top-left stays fixed** so existing cards don’t shift—only more room to the right |
+| **Widen timeline background** | Regenerate a wider SVG; **top-left stays fixed** so existing cards don’t shift, Only more room to the right is added.|
 | **Edit timeline columns and title** | Change title, column count, and column headers; regenerates the SVG in place |
 | **Crop timeline canvas to content** | Show content bounds, set a buffer, shift nodes to the origin, and resize the background (useful before PDF/export) |
 | **Send timeline background to back** | Put the SVG at the bottom of the stack |
