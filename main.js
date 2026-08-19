@@ -6,6 +6,8 @@ const DEFAULTS = {
     end: '2023-01-01',
     increment: 'month',
     step: 1,
+    customName: 'Period',
+    customCount: 4,
     pixelsPerStep: 140,
     timelineWidth: 1800,
     labelFormat: 'auto',
@@ -16,18 +18,26 @@ const DEFAULTS = {
     labelColor: '#555555',
     backgroundColor: 'transparent',
     showMinor: true,
-    outputFolder: 'Timeline Assets'
+    outputFolder: ''
 };
 class TimelineCanvasPlugin extends obsidian_1.Plugin {
+    constructor() {
+        super(...arguments);
+        this.savedOutputFolder = '';
+    }
     async onload() {
+        const data = await this.loadData();
+        this.savedOutputFolder = typeof (data === null || data === void 0 ? void 0 : data.outputFolder) === 'string' ? data.outputFolder : '';
         this.addCommand({
             id: 'create-timeline-canvas',
             name: 'Create timeline canvas',
-            callback: () => new TimelineModal(this.app, DEFAULTS, (settings) => this.createTimeline(settings)).open()
+            callback: () => this.openTimelineModal()
         });
-        this.addRibbonIcon('calendar-range', 'Create timeline canvas', () => {
-            new TimelineModal(this.app, DEFAULTS, (settings) => this.createTimeline(settings)).open();
-        });
+        this.addRibbonIcon('calendar-range', 'Create timeline canvas', () => this.openTimelineModal());
+    }
+    openTimelineModal() {
+        const defaults = { ...DEFAULTS, outputFolder: this.savedOutputFolder };
+        new TimelineModal(this.app, defaults, (settings) => this.createTimeline(settings)).open();
     }
     async createTimeline(settings) {
         const start = parseLocalDate(settings.start);
@@ -36,54 +46,64 @@ class TimelineCanvasPlugin extends obsidian_1.Plugin {
             new obsidian_1.Notice('Timeline end must be after the start.');
             return;
         }
-        const dates = generateDates(start, end, settings.increment, settings.step);
-        if (dates.length < 2) {
+        if (settings.increment === 'custom') {
+            settings.customName = settings.customName.trim() || 'Period';
+            settings.customCount = Math.max(1, Math.floor(settings.customCount) || 1);
+        }
+        else {
+            settings.step = Math.max(1, Math.floor(settings.step) || 1);
+        }
+        const marks = buildTimelineMarks(start, end, settings);
+        if (marks.length < 1) {
             new obsidian_1.Notice('The selected range does not contain enough increments.');
             return;
         }
-        if (dates.length > 20000) {
+        if (marks.length > 20000) {
             new obsidian_1.Notice('That would create more than 20,000 timeline marks. Please use a larger increment.');
             return;
         }
-        const folder = (0, obsidian_1.normalizePath)(settings.outputFolder.trim() || 'Timeline Assets');
-        await this.ensureFolder(folder);
+        const folder = (0, obsidian_1.normalizePath)(settings.outputFolder.trim());
+        if (folder)
+            await this.ensureFolder(folder);
+        this.savedOutputFolder = folder;
+        await this.saveData({ outputFolder: folder });
         const base = `Timeline ${formatFileDate(start)}–${formatFileDate(end)}`;
-        const canvasPath = await this.uniquePath(`${base}.canvas`);
-        const svgPath = await this.uniquePath(`${folder}/${base}.svg`);
-        const svg = buildSvg(dates, settings);
+        const canvasPath = await this.uniquePath(`${folder ? folder + '/' : ''}${base}.canvas`);
+        const svgPath = await this.uniquePath(`${folder ? folder + '/' : ''}${base}.svg`);
+        const svg = buildSvg(marks, start, end, settings);
         await this.app.vault.create(svgPath, svg);
-        const imageHeight = Math.max(600, (dates.length - 1) * settings.pixelsPerStep + 220);
-        const imageX = 0;
-        const imageY = 0;
+        const intervalCount = settings.increment === 'custom'
+            ? Math.max(1, settings.customCount)
+            : Math.max(1, marks.length - 1);
+        const imageHeight = Math.max(600, intervalCount * settings.pixelsPerStep + 220);
         const canvas = {
-            nodes: [
-                {
+            nodes: [{
                     id: randomId(),
                     type: 'file',
-                    x: imageX,
-                    y: imageY,
+                    x: 0,
+                    y: 0,
                     width: settings.timelineWidth,
                     height: imageHeight,
                     file: svgPath
-                }
-            ],
+                }],
             edges: []
         };
         await this.app.vault.create(canvasPath, JSON.stringify(canvas, null, 2));
         const file = this.app.vault.getAbstractFileByPath(canvasPath);
-        if (file instanceof obsidian_1.TFile) {
+        if (file instanceof obsidian_1.TFile)
             await this.app.workspace.getLeaf(true).openFile(file);
-        }
-        new obsidian_1.Notice(`Created timeline with ${dates.length - 1} increments.`);
+        const description = settings.increment === 'custom'
+            ? `${settings.customCount} ${settings.customName.toLowerCase()}`
+            : `${marks.length - 1} increments`;
+        new obsidian_1.Notice(`Created timeline with ${description}.`);
     }
     async ensureFolder(folder) {
         const parts = folder.split('/');
         let current = '';
         for (const part of parts) {
             current = current ? `${current}/${part}` : part;
-            if (!this.app.vault.getAbstractFileByPath(current)) {
+            if (!this.app.vault.getAbstractFileByPath(current))
                 await this.app.vault.createFolder(current);
-            }
         }
     }
     async uniquePath(path) {
@@ -110,39 +130,151 @@ class TimelineModal extends obsidian_1.Modal {
         this.titleEl.setText('Create timeline canvas');
         const { contentEl } = this;
         contentEl.empty();
-        contentEl.createEl('div', { text: 'Creates a vertical timeline as a Canvas image background. Your normal Canvas cards can then be placed over it.' }).addClass('timeline-help');
-        new obsidian_1.Setting(contentEl).setName('Start date/time').addText(t => t.setValue(this.settings.start).onChange((v) => this.settings.start = v));
-        new obsidian_1.Setting(contentEl).setName('End date/time').addText(t => t.setValue(this.settings.end).onChange((v) => this.settings.end = v));
-        new obsidian_1.Setting(contentEl).setName('Increment').addDropdown(d => d
-            .addOptions({ year: 'Years', quarter: 'Quarters', month: 'Months', week: 'Weeks', day: 'Days', hour: 'Hours', minute: 'Minutes' })
+        contentEl.createEl('div', {
+            text: 'Creates a vertical timeline as a Canvas image background. Your normal Canvas cards can then be placed over it.'
+        }).addClass('timeline-help');
+        new obsidian_1.Setting(contentEl)
+            .setName('Start date/time')
+            .addText(t => t.setValue(this.settings.start).onChange(v => this.settings.start = v));
+        new obsidian_1.Setting(contentEl)
+            .setName('End date/time')
+            .addText(t => t.setValue(this.settings.end).onChange(v => this.settings.end = v));
+        new obsidian_1.Setting(contentEl)
+            .setName('Increment')
+            .addDropdown(d => d
+            .addOptions({
+            year: 'Years', quarter: 'Quarters', month: 'Months', week: 'Weeks',
+            day: 'Days', hour: 'Hours', minute: 'Minutes', custom: 'Custom'
+        })
             .setValue(this.settings.increment)
-            .onChange((v) => { this.settings.increment = v; this.updateMajorDefaults(); }));
-        new obsidian_1.Setting(contentEl).setName('Increment size').setDesc('For example, 1 month or 3 months.')
-            .addText(t => t.setValue(String(this.settings.step)).onChange((v) => this.settings.step = Math.max(1, Number(v) || 1)));
-        new obsidian_1.Setting(contentEl).setName('Pixels between increments').setDesc('Vertical spacing in the generated timeline.')
-            .addText(t => t.setValue(String(this.settings.pixelsPerStep)).onChange((v) => this.settings.pixelsPerStep = Math.max(20, Number(v) || 20)));
-        new obsidian_1.Setting(contentEl).setName('Timeline width').setDesc('Width of the generated background in Canvas pixels.')
-            .addText(t => t.setValue(String(this.settings.timelineWidth)).onChange((v) => this.settings.timelineWidth = Math.max(300, Number(v) || 300)));
-        new obsidian_1.Setting(contentEl).setName('Label format').addDropdown(d => d
-            .addOptions({ auto: 'Automatic', year: '2022', month: 'Jan', monthYear: 'Jan 2022', date: 'Jul 1, 2026', dateTime: 'Jul 1, 08:00', time: '08:00' })
+            .onChange(v => {
+            this.settings.increment = v;
+            this.updateMajorDefaults();
+            this.updateIncrementFields();
+        }));
+        this.standardSettingsEl = contentEl.createDiv({ cls: 'timeline-increment-settings' });
+        this.customSettingsEl = contentEl.createDiv({ cls: 'timeline-custom-settings' });
+        this.renderIncrementFields();
+        new obsidian_1.Setting(contentEl)
+            .setName('Pixels between increments')
+            .setDesc('Vertical spacing in the generated timeline.')
+            .addText(t => t.setValue(String(this.settings.pixelsPerStep)).onChange(v => this.settings.pixelsPerStep = Math.max(20, Number(v) || 20)));
+        new obsidian_1.Setting(contentEl)
+            .setName('Timeline width')
+            .setDesc('Width of the generated background in Canvas pixels.')
+            .addText(t => t.setValue(String(this.settings.timelineWidth)).onChange(v => this.settings.timelineWidth = Math.max(300, Number(v) || 300)));
+        new obsidian_1.Setting(contentEl)
+            .setName('Label format')
+            .addDropdown(d => d
+            .addOptions({
+            auto: 'Automatic', year: '2022', month: 'Jan', monthYear: 'Jan 2022',
+            date: 'Jul 1, 2026', dateTime: 'Jul 1, 08:00', time: '08:00'
+        })
             .setValue(this.settings.labelFormat)
-            .onChange((v) => this.settings.labelFormat = v));
-        new obsidian_1.Setting(contentEl).setName('Major line every').setDesc('Use 0 for no separate major lines.')
-            .addText(t => t.setValue(String(this.settings.majorEvery)).onChange((v) => this.settings.majorEvery = Math.max(0, Number(v) || 0)));
-        new obsidian_1.Setting(contentEl).setName('Show minor lines').addToggle(t => t.setValue(this.settings.showMinor).onChange((v) => this.settings.showMinor = v));
-        new obsidian_1.Setting(contentEl).setName('Output folder').setDesc('The SVG background is stored here.')
-            .addText(t => t.setValue(this.settings.outputFolder).onChange((v) => this.settings.outputFolder = v));
+            .onChange(v => this.settings.labelFormat = v));
+        new obsidian_1.Setting(contentEl)
+            .setName('Major line every')
+            .setDesc('Use 0 for no separate major lines.')
+            .addText(t => t.setValue(String(this.settings.majorEvery)).onChange(v => this.settings.majorEvery = Math.max(0, Number(v) || 0)));
+        new obsidian_1.Setting(contentEl)
+            .setName('Show minor lines')
+            .addToggle(t => t.setValue(this.settings.showMinor).onChange(v => this.settings.showMinor = v));
+        const outputSetting = new obsidian_1.Setting(contentEl)
+            .setName('Output folder')
+            .setDesc('Folder within your vault where the Canvas and SVG will be created. Leave blank for the vault root. Examples: Timelines or Projects/History/Timelines. Missing folders will be created automatically.');
+        outputSetting.addText(t => t
+            .setPlaceholder('Vault root')
+            .setValue(this.settings.outputFolder)
+            .setClass('timeline-output-folder')
+            .onChange(v => this.settings.outputFolder = v.trim()));
+        outputSetting.addButton(b => b.setButtonText('Browse').onClick(() => {
+            new FolderSuggestModal(this.app, path => {
+                this.settings.outputFolder = path;
+                const input = contentEl.querySelector('.timeline-output-folder');
+                if (input)
+                    input.value = path;
+            }).open();
+        }));
         const preview = contentEl.createEl('div', { cls: 'timeline-preview' });
         preview.setText('A new .canvas file will be created. The timeline is a scalable SVG image placed at the back of the Canvas.');
-        new obsidian_1.Setting(contentEl).addButton(b => b.setButtonText('Create timeline').setCta().onClick(() => {
+        new obsidian_1.Setting(contentEl)
+            .addButton(b => b.setButtonText('Create timeline').setCta().onClick(() => {
             this.close();
             this.onSubmit({ ...this.settings });
-        })).addButton(b => b.setButtonText('Cancel').onClick(() => this.close()));
+        }))
+            .addButton(b => b.setButtonText('Cancel').onClick(() => this.close()));
+    }
+    renderIncrementFields() {
+        if (!this.standardSettingsEl || !this.customSettingsEl)
+            return;
+        this.standardSettingsEl.empty();
+        this.customSettingsEl.empty();
+        if (this.settings.increment === 'custom') {
+            this.customSettingsEl.show();
+            this.standardSettingsEl.hide();
+            new obsidian_1.Setting(this.customSettingsEl)
+                .setName('Custom increment name')
+                .setDesc('The word used for each generated label, such as Semester, Phase, or Chapter.')
+                .addText(t => t
+                .setValue(this.settings.customName)
+                .setPlaceholder('Semester')
+                .onChange(v => this.settings.customName = v));
+            new obsidian_1.Setting(this.customSettingsEl)
+                .setName('Number of occurrences')
+                .setDesc('How many equally spaced custom increments should appear across the date range.')
+                .addText(t => t
+                .setValue(String(this.settings.customCount))
+                .onChange(v => this.settings.customCount = Math.max(1, Math.floor(Number(v)) || 1)));
+            this.customSettingsEl.createEl('div', {
+                text: 'Custom increments are evenly distributed across the selected date range and labeled “Name 1”, “Name 2”, etc. The start and end dates remain the timeline boundaries.'
+            }).addClass('timeline-custom-help');
+        }
+        else {
+            this.customSettingsEl.hide();
+            this.standardSettingsEl.show();
+            new obsidian_1.Setting(this.standardSettingsEl)
+                .setName('Increment size')
+                .setDesc('For example, 1 month or 3 months.')
+                .addText(t => t
+                .setValue(String(this.settings.step))
+                .onChange(v => this.settings.step = Math.max(1, Math.floor(Number(v)) || 1)));
+        }
+    }
+    updateIncrementFields() {
+        this.renderIncrementFields();
     }
     updateMajorDefaults() {
+        if (this.settings.increment === 'custom') {
+            this.settings.majorEvery = 0;
+            return;
+        }
         const map = { year: 5, quarter: 4, month: 12, week: 4, day: 7, hour: 6, minute: 15 };
         this.settings.majorEvery = map[this.settings.increment];
     }
+}
+class FolderSuggestModal extends obsidian_1.FuzzySuggestModal {
+    constructor(app, onChoose) {
+        super(app);
+        this.onChoose = onChoose;
+        this.folders = [null, ...collectFolders(app.vault.getRoot())];
+        this.setPlaceholder('Choose a vault folder...');
+    }
+    getItems() { return this.folders; }
+    getItemText(item) { return item ? item.path : '(Vault root)'; }
+    onChooseItem(item) { var _a; this.onChoose((_a = item === null || item === void 0 ? void 0 : item.path) !== null && _a !== void 0 ? _a : ''); }
+}
+function collectFolders(root) {
+    const result = [];
+    const visit = (folder) => {
+        for (const child of folder.children) {
+            if (child instanceof obsidian_1.TFolder) {
+                result.push(child);
+                visit(child);
+            }
+        }
+    };
+    visit(root);
+    return result.sort((a, b) => a.path.localeCompare(b.path));
 }
 function parseLocalDate(value) {
     const m = value.trim().match(/^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2}))?)?$/);
@@ -150,6 +282,16 @@ function parseLocalDate(value) {
         return null;
     const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4] || 0), Number(m[5] || 0), Number(m[6] || 0));
     return isNaN(d.getTime()) ? null : d;
+}
+function buildTimelineMarks(start, end, settings) {
+    if (settings.increment === 'custom')
+        return generateCustomMarks(start, end, settings.customName, settings.customCount);
+    const dates = generateDates(start, end, settings.increment, settings.step);
+    return dates.map((date, index) => ({
+        position: index / Math.max(1, dates.length - 1),
+        label: formatDateLabel(date, settings.labelFormat, settings.increment),
+        major: isMajor(index, date, settings)
+    }));
 }
 function generateDates(start, end, unit, step) {
     var _a;
@@ -164,6 +306,22 @@ function generateDates(start, end, unit, step) {
     if (((_a = out[out.length - 1]) === null || _a === void 0 ? void 0 : _a.getTime()) !== end.getTime())
         out.push(new Date(end));
     return out;
+}
+function generateCustomMarks(start, end, name, count) {
+    const marks = [];
+    const safeCount = Math.max(1, Math.floor(count) || 1);
+    // Custom increments represent named periods. Their labels are centered in
+    // equal portions of the requested date range; the start/end dates remain
+    // the outer timeline boundaries.
+    for (let i = 0; i < safeCount; i++) {
+        const position = (i + 0.5) / safeCount;
+        marks.push({
+            position,
+            label: `${name} ${i + 1}`,
+            major: true
+        });
+    }
+    return marks;
 }
 function add(date, unit, amount) {
     const d = new Date(date);
@@ -183,11 +341,12 @@ function add(date, unit, amount) {
         d.setMinutes(d.getMinutes() + amount);
     return d;
 }
-function buildSvg(dates, s) {
+function buildSvg(marks, start, end, s) {
     const left = 180;
     const right = 40;
     const width = s.timelineWidth;
-    const height = Math.max(600, (dates.length - 1) * s.pixelsPerStep + 180);
+    const intervalCount = s.increment === 'custom' ? Math.max(1, s.customCount) : Math.max(1, marks.length - 1);
+    const height = Math.max(600, intervalCount * s.pixelsPerStep + 180);
     const lineX = left;
     const lineEnd = width - right;
     const labelX = 20;
@@ -195,23 +354,29 @@ function buildSvg(dates, s) {
     parts.push(`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">`);
     if (s.backgroundColor !== 'transparent')
         parts.push(`<rect width="100%" height="100%" fill="${escapeXml(s.backgroundColor)}"/>`);
-    const total = dates.length - 1;
-    for (let i = 0; i < dates.length; i++) {
-        const date = dates[i];
-        const y = 90 + (i / total) * (height - 180);
-        const major = isMajor(i, date, s);
+    const top = 90;
+    const bottom = height - 90;
+    const yFor = (position) => top + position * (bottom - top);
+    // Always draw the actual date-range boundaries.
+    parts.push(`<line x1="${lineX}" y1="${top}" x2="${lineEnd}" y2="${top}" stroke="${escapeXml(s.majorLineColor)}" stroke-width="2.5" opacity="0.9"/>`);
+    parts.push(`<line x1="${lineX}" y1="${bottom}" x2="${lineEnd}" y2="${bottom}" stroke="${escapeXml(s.majorLineColor)}" stroke-width="2.5" opacity="0.9"/>`);
+    parts.push(`<text x="${labelX}" y="${top + 6}" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="20" font-weight="600" fill="${escapeXml(s.labelColor)}">${escapeXml(formatBoundaryLabel(start, s.labelFormat, s.increment))}</text>`);
+    parts.push(`<text x="${labelX}" y="${bottom + 6}" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="20" font-weight="600" fill="${escapeXml(s.labelColor)}">${escapeXml(formatBoundaryLabel(end, s.labelFormat, s.increment))}</text>`);
+    for (const mark of marks) {
+        const y = yFor(mark.position);
+        const major = mark.major;
         const lineWidth = major ? 2.5 : 1;
         const color = major ? s.majorLineColor : s.lineColor;
-        if (s.showMinor || major || i === 0 || i === dates.length - 1) {
+        if (s.showMinor || major) {
             parts.push(`<line x1="${lineX}" y1="${y.toFixed(2)}" x2="${lineEnd}" y2="${y.toFixed(2)}" stroke="${escapeXml(color)}" stroke-width="${lineWidth}" opacity="${major ? 0.9 : 0.55}"/>`);
         }
-        parts.push(`<text x="${labelX}" y="${(y + 6).toFixed(2)}" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="${major ? 20 : 16}" font-weight="${major ? 600 : 400}" fill="${escapeXml(s.labelColor)}">${escapeXml(formatDateLabel(date, s.labelFormat, s.increment))}</text>`);
+        parts.push(`<text x="${labelX}" y="${(y + 6).toFixed(2)}" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="${major ? 20 : 16}" font-weight="${major ? 600 : 400}" fill="${escapeXml(s.labelColor)}">${escapeXml(mark.label)}</text>`);
     }
     parts.push('</svg>');
     return parts.join('');
 }
 function isMajor(index, date, s) {
-    if (index === 0 || index === 0 || index === 999999)
+    if (index === 0)
         return true;
     if (s.majorEvery <= 0)
         return false;
@@ -229,21 +394,28 @@ function isMajor(index, date, s) {
         return date.getHours() === 0;
     return date.getMinutes() === 0;
 }
+function formatBoundaryLabel(date, format, increment) {
+    if (increment === 'custom' && format === 'auto')
+        return `${monthName(date.getMonth())} ${date.getFullYear()}`;
+    return formatDateLabel(date, format, increment);
+}
 function formatDateLabel(date, format, increment) {
-    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
     const auto = increment === 'year' ? 'year' : increment === 'quarter' || increment === 'month' ? 'monthYear' : increment === 'week' || increment === 'day' ? 'date' : increment === 'hour' ? 'dateTime' : 'time';
     const f = format === 'auto' ? auto : format;
     if (f === 'year')
         return String(date.getFullYear());
     if (f === 'month')
-        return months[date.getMonth()];
+        return monthName(date.getMonth());
     if (f === 'monthYear')
-        return `${months[date.getMonth()]} ${date.getFullYear()}`;
+        return `${monthName(date.getMonth())} ${date.getFullYear()}`;
     if (f === 'date')
-        return `${months[date.getMonth()]} ${date.getDate()}, ${date.getFullYear()}`;
+        return `${monthName(date.getMonth())} ${date.getDate()}, ${date.getFullYear()}`;
     if (f === 'dateTime')
-        return `${months[date.getMonth()]} ${date.getDate()}, ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+        return `${monthName(date.getMonth())} ${date.getDate()}, ${pad(date.getHours())}:${pad(date.getMinutes())}`;
     return `${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+function monthName(month) {
+    return ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][month];
 }
 function formatFileDate(date) {
     return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;

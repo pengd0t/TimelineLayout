@@ -2,3 +2,6 @@
 .timeline-canvas-modal .setting-item-name { font-weight: 600; }
 .timeline-canvas-modal .timeline-preview { margin: 12px 0; padding: 10px; border: 1px solid var(--background-modifier-border); border-radius: 6px; font-size: 0.9em; }
 .timeline-canvas-modal .timeline-help { color: var(--text-muted); font-size: 0.85em; margin-bottom: 12px; }
+.timeline-canvas-modal .timeline-custom-help { color: var(--text-muted); font-size: 0.85em; margin: 4px 0 12px 0; }
+.timeline-canvas-modal .timeline-custom-settings { padding-left: 12px; border-left: 2px solid var(--background-modifier-border); margin-bottom: 8px; }
+.timeline-canvas-modal .timeline-increment-settings { margin-bottom: 4px; }
