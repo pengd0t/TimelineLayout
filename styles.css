@@ -1,7 +1,47 @@
 .timeline-canvas-modal .setting-item { border-top: 0; padding-top: 8px; }
 .timeline-canvas-modal .setting-item-name { font-weight: 600; }
-.timeline-canvas-modal .timeline-preview { margin: 12px 0; padding: 10px; border: 1px solid var(--background-modifier-border); border-radius: 6px; font-size: 0.9em; }
 .timeline-canvas-modal .timeline-help { color: var(--text-muted); font-size: 0.85em; margin-bottom: 12px; }
 .timeline-canvas-modal .timeline-custom-help { color: var(--text-muted); font-size: 0.85em; margin: 4px 0 12px 0; }
 .timeline-canvas-modal .timeline-custom-settings { padding-left: 12px; border-left: 2px solid var(--background-modifier-border); margin-bottom: 8px; }
 .timeline-canvas-modal .timeline-increment-settings { margin-bottom: 4px; }
+
+.timeline-canvas-modal .timeline-preview {
+  margin: 12px 0;
+  padding: 10px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  font-size: 0.9em;
+}
+
+/* Stacked output folder + buttons — never clipped horizontally */
+.timeline-canvas-modal .timeline-output-block {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--background-modifier-border);
+}
+.timeline-canvas-modal .timeline-output-label {
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+.timeline-canvas-modal .timeline-output-desc {
+  color: var(--text-muted);
+  font-size: 0.85em;
+  margin-bottom: 8px;
+  line-height: 1.4;
+}
+.timeline-canvas-modal .timeline-folder-row {
+  margin-bottom: 10px;
+}
+.timeline-canvas-modal .timeline-output-folder {
+  width: 100%;
+  box-sizing: border-box;
+}
+.timeline-canvas-modal .timeline-button-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+.timeline-canvas-modal .timeline-button-row button {
+  cursor: pointer;
+}

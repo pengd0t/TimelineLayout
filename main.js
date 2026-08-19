@@ -130,16 +130,20 @@ class TimelineModal extends obsidian_1.Modal {
         this.titleEl.setText('Create timeline canvas');
         const { contentEl } = this;
         contentEl.empty();
+        contentEl.addClass('timeline-modal-content');
         contentEl.createEl('div', {
-            text: 'Creates a vertical timeline as a Canvas image background. Your normal Canvas cards can then be placed over it.'
+            text: 'Creates a vertical timeline as a Canvas image background. Your normal Canvas cards can then be placed over it. (v0.3.6)'
         }).addClass('timeline-help');
-        new obsidian_1.Setting(contentEl)
+        // Keep the settings in their own scrollable region. The action buttons
+        // live outside that region so they remain visible on smaller screens.
+        const formEl = contentEl.createDiv({ cls: 'timeline-modal-scroll' });
+        new obsidian_1.Setting(formEl)
             .setName('Start date/time')
             .addText(t => t.setValue(this.settings.start).onChange(v => this.settings.start = v));
-        new obsidian_1.Setting(contentEl)
+        new obsidian_1.Setting(formEl)
             .setName('End date/time')
             .addText(t => t.setValue(this.settings.end).onChange(v => this.settings.end = v));
-        new obsidian_1.Setting(contentEl)
+        new obsidian_1.Setting(formEl)
             .setName('Increment')
             .addDropdown(d => d
             .addOptions({
@@ -152,18 +156,18 @@ class TimelineModal extends obsidian_1.Modal {
             this.updateMajorDefaults();
             this.updateIncrementFields();
         }));
-        this.standardSettingsEl = contentEl.createDiv({ cls: 'timeline-increment-settings' });
-        this.customSettingsEl = contentEl.createDiv({ cls: 'timeline-custom-settings' });
+        this.standardSettingsEl = formEl.createDiv({ cls: 'timeline-increment-settings' });
+        this.customSettingsEl = formEl.createDiv({ cls: 'timeline-custom-settings' });
         this.renderIncrementFields();
-        new obsidian_1.Setting(contentEl)
+        new obsidian_1.Setting(formEl)
             .setName('Pixels between increments')
             .setDesc('Vertical spacing in the generated timeline.')
             .addText(t => t.setValue(String(this.settings.pixelsPerStep)).onChange(v => this.settings.pixelsPerStep = Math.max(20, Number(v) || 20)));
-        new obsidian_1.Setting(contentEl)
+        new obsidian_1.Setting(formEl)
             .setName('Timeline width')
             .setDesc('Width of the generated background in Canvas pixels.')
             .addText(t => t.setValue(String(this.settings.timelineWidth)).onChange(v => this.settings.timelineWidth = Math.max(300, Number(v) || 300)));
-        new obsidian_1.Setting(contentEl)
+        new obsidian_1.Setting(formEl)
             .setName('Label format')
             .addDropdown(d => d
             .addOptions({
@@ -172,37 +176,48 @@ class TimelineModal extends obsidian_1.Modal {
         })
             .setValue(this.settings.labelFormat)
             .onChange(v => this.settings.labelFormat = v));
-        new obsidian_1.Setting(contentEl)
+        new obsidian_1.Setting(formEl)
             .setName('Major line every')
             .setDesc('Use 0 for no separate major lines.')
             .addText(t => t.setValue(String(this.settings.majorEvery)).onChange(v => this.settings.majorEvery = Math.max(0, Number(v) || 0)));
-        new obsidian_1.Setting(contentEl)
+        new obsidian_1.Setting(formEl)
             .setName('Show minor lines')
             .addToggle(t => t.setValue(this.settings.showMinor).onChange(v => this.settings.showMinor = v));
-        const outputSetting = new obsidian_1.Setting(contentEl)
-            .setName('Output folder')
-            .setDesc('Folder within your vault where the Canvas and SVG will be created. Leave blank for the vault root. Examples: Timelines or Projects/History/Timelines. Missing folders will be created automatically.');
-        outputSetting.addText(t => t
-            .setPlaceholder('Vault root')
-            .setValue(this.settings.outputFolder)
-            .setClass('timeline-output-folder')
-            .onChange(v => this.settings.outputFolder = v.trim()));
-        outputSetting.addButton(b => b.setButtonText('Browse').onClick(() => {
+        // Output folder + actions are stacked vertically so controls are never
+        // clipped off the right edge of the modal.
+        const outputBlock = formEl.createDiv({ cls: 'timeline-output-block' });
+        outputBlock.createEl('div', { text: 'Output folder', cls: 'timeline-output-label' });
+        outputBlock.createEl('div', {
+            text: 'Folder within your vault where the Canvas and SVG will be created. Leave blank for the vault root. Examples: Timelines or Projects/History/Timelines. Missing folders will be created automatically.',
+            cls: 'timeline-output-desc'
+        });
+        const folderRow = outputBlock.createDiv({ cls: 'timeline-folder-row' });
+        const folderInput = folderRow.createEl('input', {
+            type: 'text',
+            cls: 'timeline-output-folder',
+            attr: { placeholder: 'Vault root' }
+        });
+        folderInput.value = this.settings.outputFolder;
+        folderInput.addEventListener('input', () => {
+            this.settings.outputFolder = folderInput.value.trim();
+        });
+        const buttonRow = outputBlock.createDiv({ cls: 'timeline-button-row' });
+        const browseBtn = buttonRow.createEl('button', { text: 'Browse' });
+        browseBtn.addEventListener('click', () => {
             new FolderSuggestModal(this.app, path => {
                 this.settings.outputFolder = path;
-                const input = contentEl.querySelector('.timeline-output-folder');
-                if (input)
-                    input.value = path;
+                folderInput.value = path;
             }).open();
-        }));
-        const preview = contentEl.createEl('div', { cls: 'timeline-preview' });
-        preview.setText('A new .canvas file will be created. The timeline is a scalable SVG image placed at the back of the Canvas.');
-        new obsidian_1.Setting(contentEl)
-            .addButton(b => b.setButtonText('Create timeline').setCta().onClick(() => {
+        });
+        const createBtn = buttonRow.createEl('button', { text: 'Create timeline', cls: 'mod-cta' });
+        createBtn.addEventListener('click', () => {
             this.close();
             this.onSubmit({ ...this.settings });
-        }))
-            .addButton(b => b.setButtonText('Cancel').onClick(() => this.close()));
+        });
+        const cancelBtn = buttonRow.createEl('button', { text: 'Cancel' });
+        cancelBtn.addEventListener('click', () => this.close());
+        const preview = formEl.createEl('div', { cls: 'timeline-preview' });
+        preview.setText('A new .canvas file will be created. The timeline is a scalable SVG image placed at the back of the Canvas.');
     }
     renderIncrementFields() {
         if (!this.standardSettingsEl || !this.customSettingsEl)
