@@ -45,3 +45,14 @@
 .timeline-canvas-modal .timeline-button-row button {
   cursor: pointer;
 }
+
+/* Timeline SVG background: stay visually under other cards */
+.canvas-node.timeline-canvas-bg-node {
+  z-index: 0 !important;
+}
+
+/* Locked background: ignore mouse so cards on top are selectable */
+.canvas-node.timeline-canvas-bg-node.is-timeline-bg-locked,
+.canvas-node.is-timeline-bg-locked {
+  pointer-events: none !important;
+}

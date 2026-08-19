@@ -1,7 +1,7 @@
 {
   "id": "timeline-canvas",
   "name": "Timeline Canvas",
-  "version": "0.3.7",
+  "version": "0.4.2",
   "minAppVersion": "1.5.0",
   "description": "Create vertical timeline backgrounds on Canvas, including custom evenly spaced increments and selectable vault output folders.",
   "author": "John Fannin",
