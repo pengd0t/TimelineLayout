@@ -46,13 +46,13 @@
   cursor: pointer;
 }
 
-/* Timeline SVG background: stay visually under other cards */
-.canvas-node.timeline-canvas-bg-node {
-  z-index: 0 !important;
+/* Timeline SVG background: stay under other cards (also set inline in JS) */
+.workspace-leaf-content[data-type="canvas"] .canvas-wrapper .canvas-node.timeline-canvas-bg-node {
+  z-index: 0;
 }
 
-/* Locked background: ignore mouse so cards on top are selectable */
-.canvas-node.timeline-canvas-bg-node.is-timeline-bg-locked,
-.canvas-node.is-timeline-bg-locked {
-  pointer-events: none !important;
+/* Locked background: non-interactive so cards on top stay selectable (also set inline in JS) */
+.workspace-leaf-content[data-type="canvas"] .canvas-wrapper .canvas-node.timeline-canvas-bg-node.is-timeline-bg-locked,
+.workspace-leaf-content[data-type="canvas"] .canvas-wrapper .canvas-node.is-timeline-bg-locked {
+  pointer-events: none;
 }
