@@ -279,31 +279,34 @@ class TimelineCanvasPlugin extends import_obsidian.Plugin {
     await this.app.vault.modify(file, JSON.stringify(data, null, 2));
     await this.refreshOpenCanvas(file, data);
   }
-  /** Push data into open canvas views so SVG/file nodes reload from disk. */
-  async refreshOpenCanvas(file, data) {
-    var _a, _b, _c, _d, _e, _f, _g, _h;
-    for (const leaf of this.app.workspace.getLeavesOfType("canvas")) {
+  /**
+   * Force open canvas tabs to fully reload so embedded SVG backgrounds
+   * re-read from disk (setData alone keeps a cached image).
+   * Equivalent to the user closing and reopening the tab.
+   */
+  async refreshOpenCanvas(file, _data) {
+    const leaves = this.app.workspace.getLeavesOfType("canvas").filter((leaf) => {
+      var _a;
       const view = leaf.view;
-      if (((_a = view.file) == null ? void 0 : _a.path) !== file.path) continue;
-      if ((_b = view.canvas) == null ? void 0 : _b.setData) {
+      return ((_a = view.file) == null ? void 0 : _a.path) === file.path;
+    });
+    for (const leaf of leaves) {
+      const wasActive = leaf === this.app.workspace.getMostRecentLeaf() || leaf === this.app.workspace.activeLeaf;
+      const viewState = leaf.getViewState();
+      try {
+        await leaf.setViewState({ type: "empty", state: {} });
+        await leaf.setViewState(viewState);
+        if (wasActive) {
+          this.app.workspace.setActiveLeaf(leaf, { focus: true });
+        }
+      } catch (e) {
         try {
-          view.canvas.setData(data);
-          (_d = (_c = view.canvas).requestFrame) == null ? void 0 : _d.call(_c);
-          if (view.canvas.nodes) {
-            for (const node of view.canvas.nodes.values()) {
-              if (((_e = node.file) == null ? void 0 : _e.extension) === "svg") {
-                const nd = (_f = node.getData) == null ? void 0 : _f.call(node);
-                if (nd && node.setData) node.setData({ ...nd });
-              }
-            }
-          }
-          (_h = (_g = view.canvas).requestFrame) == null ? void 0 : _h.call(_g);
-          continue;
-        } catch (e) {
+          await leaf.openFile(file, { active: wasActive });
+        } catch (e2) {
         }
       }
-      await leaf.openFile(file, { active: leaf === this.app.workspace.getMostRecentLeaf() });
     }
+    window.setTimeout(() => this.applyBackgroundDomState(), 150);
   }
   async widenTimeline(canvasFile, ctx, newWidth) {
     const width = Math.max(300, Math.floor(newWidth));
