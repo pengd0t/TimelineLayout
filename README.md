@@ -7,9 +7,22 @@ Use it for a single clean timeline, or for **several parallel tracks** (columns)
 ---
 
 ## Why use it?
-
 Obsidian Canvas is excellent for spatial thinking, but it has no built-in time grid. Without a background, cards drift and “when” becomes hard to see at a glance.
 
+Here's the problem I'd have.  
+
+<img width="894" height="732" alt="timeline-canvas-old" src="https://github.com/user-attachments/assets/bf2655e7-c7c8-4c1e-b2d3-ab25d5be46a9" />
+
+Once a timeline like this starts including many items in parallel related timelines, I can see how they all fit together in time visually and quickly... But... half the time is spent stretching out old timelines and tweaking things so that everything fits and everything aligned left to right across the page still lines up as a single point in time as you're going down the timeline.
+
+My solution was to create a simple but customizable canvas background that keeps everything in it's final location from the start. 
+
+<img width="921" height="641" alt="timeline-canvas-new" src="https://github.com/user-attachments/assets/0ca7d5d4-0016-4b16-a95b-16bc181c41eb" />
+
+If necessary, it is possible to do some editing after the fact without starting over with a new canvas just because you want to edit the background image.  As long as you leave the incremental spacing representing months (or days, or years, etc.) all your cards will stay put if you add another column to make it wider, or crop things down smaller.
+
+
+## How it works
 This plugin draws the time axis for you:
 
 1. You choose a date range and how time is divided (months, years, custom periods, …).
