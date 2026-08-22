@@ -47,7 +47,8 @@ const DEFAULTS = {
   outputFolder: "",
   title: "",
   columnCount: 1,
-  columnTitles: [""]
+  columnTitles: [""],
+  showColumnMonthMarkers: false
 };
 const DEFAULT_PLUGIN_SETTINGS = {
   defaultCanvasFolder: "",
@@ -183,6 +184,7 @@ class TimelineCanvasPlugin extends import_obsidian.Plugin {
     const svgPath = await this.uniquePath(`${svgFolder ? svgFolder + "/" : ""}${base}.svg`);
     settings.columnCount = Math.max(1, Math.min(20, Math.floor(settings.columnCount) || 1));
     settings.columnTitles = normalizeColumnTitles(settings.columnTitles, settings.columnCount);
+    settings.showColumnMonthMarkers = settings.columnCount > 1 && settings.showColumnMonthMarkers === true;
     settings.title = (settings.title || "").trim();
     const svg = buildSvg(marks, start, end, settings);
     await this.app.vault.create(svgPath, svg);
@@ -340,6 +342,7 @@ class TimelineCanvasPlugin extends import_obsidian.Plugin {
     }
     settings.columnCount = Math.max(1, Math.min(20, Math.floor(Number(settings.columnCount)) || 1));
     settings.columnTitles = normalizeColumnTitles(settings.columnTitles, settings.columnCount);
+    settings.showColumnMonthMarkers = settings.columnCount > 1 && settings.showColumnMonthMarkers === true;
     settings.timelineWidth = Math.max(300, Math.floor(Number(settings.timelineWidth)) || 300);
     settings.title = (settings.title || "").trim();
     const marks = buildTimelineMarks(start, end, settings);
@@ -665,6 +668,9 @@ class TimelineModal extends import_obsidian.Modal {
       });
       return;
     }
+    new import_obsidian.Setting(this.columnTitlesEl).setName("Repeat month/year at timeline lines").setDesc("Adds subtle month/year markers above and below every horizontal line in each column, making long columns easier to follow while scrolling.").addToggle((t) => t.setValue(this.settings.showColumnMonthMarkers === true).onChange((v) => {
+      this.settings.showColumnMonthMarkers = v;
+    }));
     for (let i = 0; i < count; i++) {
       const idx = i;
       new import_obsidian.Setting(this.columnTitlesEl).setName(`Column ${idx + 1} title`).addText((t) => t.setPlaceholder(idx === 0 ? "e.g. General history" : idx === 1 ? "e.g. Family history" : `Column ${idx + 1}`).setValue(this.settings.columnTitles[idx] || "").onChange((v) => {
@@ -683,7 +689,8 @@ class ColumnsModal extends import_obsidian.Modal {
       ...settings,
       columnTitles: [...settings.columnTitles || []],
       title: settings.title || "",
-      columnCount: Math.max(1, settings.columnCount || 1)
+      columnCount: Math.max(1, settings.columnCount || 1),
+      showColumnMonthMarkers: settings.showColumnMonthMarkers === true
     };
     this.onSubmit = onSubmit;
   }
@@ -710,6 +717,7 @@ class ColumnsModal extends import_obsidian.Modal {
     }));
     new import_obsidian.Setting(contentEl).addButton((b) => b.setButtonText("Apply").setCta().onClick(() => {
       this.settings.columnTitles = normalizeColumnTitles(this.settings.columnTitles, this.settings.columnCount);
+      this.settings.showColumnMonthMarkers = this.settings.columnCount > 1 && this.settings.showColumnMonthMarkers === true;
       this.close();
       this.onSubmit({ ...this.settings, columnTitles: [...this.settings.columnTitles] });
     })).addButton((b) => b.setButtonText("Cancel").onClick(() => this.close()));
@@ -720,6 +728,11 @@ class ColumnsModal extends import_obsidian.Modal {
     const count = this.settings.columnCount;
     while (this.settings.columnTitles.length < count) this.settings.columnTitles.push("");
     this.settings.columnTitles = this.settings.columnTitles.slice(0, count);
+    if (count > 1) {
+      new import_obsidian.Setting(this.titlesEl).setName("Repeat month/year at timeline lines").setDesc("Adds subtle month/year markers above and below every horizontal line in each column.").addToggle((t) => t.setValue(this.settings.showColumnMonthMarkers === true).onChange((v) => {
+        this.settings.showColumnMonthMarkers = v;
+      }));
+    }
     for (let i = 0; i < count; i++) {
       const idx = i;
       new import_obsidian.Setting(this.titlesEl).setName(`Column ${idx + 1} title`).addText((t) => t.setValue(this.settings.columnTitles[idx] || "").onChange((v) => {
@@ -905,7 +918,8 @@ function buildTimelineMarks(start, end, settings) {
   return dates.map((date, index) => ({
     position: index / Math.max(1, dates.length - 1),
     label: formatDateLabel(date, settings.labelFormat, settings.increment),
-    major: isMajor(index, date, settings)
+    major: isMajor(index, date, settings),
+    date
   }));
 }
 function generateDates(start, end, unit, step) {
@@ -928,7 +942,8 @@ function generateCustomMarks(start, end, name, count) {
     marks.push({
       position,
       label: `${name} ${i + 1}`,
-      major: true
+      major: true,
+      date: new Date(start.getTime() + (end.getTime() - start.getTime()) * position)
     });
   }
   return marks;
@@ -1070,6 +1085,7 @@ function serializeTimelineSettings(settings) {
     ...settings,
     columnCount: Math.max(1, Math.min(20, settings.columnCount || 1)),
     columnTitles: normalizeColumnTitles(settings.columnTitles, settings.columnCount || 1),
+    showColumnMonthMarkers: settings.showColumnMonthMarkers === true,
     title: (settings.title || "").trim()
   };
   return JSON.stringify(payload);
@@ -1083,6 +1099,7 @@ function deserializeTimelineSettings(raw) {
       ...data,
       columnCount: Math.max(1, Math.min(20, Number(data.columnCount) || 1)),
       columnTitles: normalizeColumnTitles(data.columnTitles, Number(data.columnCount) || 1),
+      showColumnMonthMarkers: data.showColumnMonthMarkers === true,
       title: typeof data.title === "string" ? data.title : "",
       timelineWidth: Math.max(300, Number(data.timelineWidth) || DEFAULTS.timelineWidth)
     };
@@ -1140,6 +1157,7 @@ function buildSvg(marks, start, end, s) {
   const lineX = left;
   const lineEnd = width - right;
   const labelX = 20;
+  const showColumnMonthMarkers = columns > 1 && s.showColumnMonthMarkers === true;
   const parts = [];
   const metaB64 = encodeSettingsBase64(s);
   parts.push(`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" data-timeline-settings="${metaB64}">`);
@@ -1183,6 +1201,31 @@ function buildSvg(marks, start, end, s) {
     }
     parts.push(`<text x="${labelX}" y="${(y + 6).toFixed(2)}" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="${major ? 20 : 16}" font-weight="${major ? 600 : 400}" fill="${escapeXml(s.labelColor)}">${escapeXml(mark.label)}</text>`);
   }
+  if (showColumnMonthMarkers) {
+    const markerLines = [
+      { y: top, date: start },
+      ...marks.filter((mark) => s.showMinor || mark.major).map((mark) => ({
+        y: yFor(mark.position),
+        date: mark.date || new Date(start.getTime() + (end.getTime() - start.getTime()) * mark.position)
+      })),
+      { y: bottom, date: end }
+    ];
+    const renderedLines = /* @__PURE__ */ new Set();
+    for (const marker of markerLines) {
+      const key = marker.y.toFixed(2);
+      if (renderedLines.has(key)) continue;
+      renderedLines.add(key);
+      const beforeLine = new Date(marker.date);
+      beforeLine.setDate(beforeLine.getDate() - 1);
+      const aboveText = formatMonthYearMarker(beforeLine);
+      const belowText = formatMonthYearMarker(marker.date);
+      for (let i = 0; i < columns; i++) {
+        const markerX = lineX + colWidth * i + 8;
+        parts.push(`<text x="${markerX.toFixed(2)}" y="${(marker.y - 5).toFixed(2)}" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="10" fill="${escapeXml(s.labelColor)}" opacity="0.55" pointer-events="none">${escapeXml(aboveText)}</text>`);
+        parts.push(`<text x="${markerX.toFixed(2)}" y="${(marker.y + 12).toFixed(2)}" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="10" fill="${escapeXml(s.labelColor)}" opacity="0.55" pointer-events="none">${escapeXml(belowText)}</text>`);
+      }
+    }
+  }
   parts.push("</svg>");
   return parts.join("");
 }
@@ -1210,6 +1253,9 @@ function formatDateLabel(date, format, increment) {
   if (f === "date") return `${monthName(date.getMonth())} ${date.getDate()}, ${date.getFullYear()}`;
   if (f === "dateTime") return `${monthName(date.getMonth())} ${date.getDate()}, ${pad(date.getHours())}:${pad(date.getMinutes())}`;
   return `${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+function formatMonthYearMarker(date) {
+  return `${monthName(date.getMonth())} ${date.getFullYear()}`;
 }
 function monthName(month) {
   return ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][month];
