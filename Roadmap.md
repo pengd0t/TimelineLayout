@@ -6,11 +6,6 @@
 1.0.1 
 - Added subtle date information on horizontal increment lines, for use when working on wide timelines with many columns.
 
-
-
-
-## Planned
-
 1.0.2
 - Increase max columns from 20-50
 - Add "Edit Timeline Date Range" command.
