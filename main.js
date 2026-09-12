@@ -192,7 +192,7 @@ class TimelineCanvasPlugin extends import_obsidian.Plugin {
     const base = `Timeline ${formatFileDate(start)}\u2013${formatFileDate(end)}`;
     const canvasPath = await this.uniquePath(`${canvasFolder ? canvasFolder + "/" : ""}${base}.canvas`);
     const svgPath = await this.uniquePath(`${svgFolder ? svgFolder + "/" : ""}${base}.svg`);
-    settings.columnCount = Math.max(1, Math.min(20, Math.floor(settings.columnCount) || 1));
+    settings.columnCount = Math.max(1, Math.min(50, Math.floor(settings.columnCount) || 1));
     settings.columnTitles = normalizeColumnTitles(settings.columnTitles, settings.columnCount);
     settings.showColumnMonthMarkers = settings.columnCount > 1 && settings.showColumnMonthMarkers === true;
     settings.title = (settings.title || "").trim();
@@ -376,7 +376,7 @@ class TimelineCanvasPlugin extends import_obsidian.Plugin {
       new import_obsidian.Notice("Stored timeline dates are invalid; cannot rebuild.");
       return;
     }
-    settings.columnCount = Math.max(1, Math.min(20, Math.floor(Number(settings.columnCount)) || 1));
+    settings.columnCount = Math.max(1, Math.min(50, Math.floor(Number(settings.columnCount)) || 1));
     settings.columnTitles = normalizeColumnTitles(settings.columnTitles, settings.columnCount);
     settings.showColumnMonthMarkers = settings.columnCount > 1 && settings.showColumnMonthMarkers === true;
     settings.timelineWidth = Math.max(300, Math.floor(Number(settings.timelineWidth)) || 300);
@@ -624,7 +624,7 @@ class TimelineModal extends import_obsidian.Modal {
     new import_obsidian.Setting(formEl).setName("Show minor lines").addToggle((t) => t.setValue(this.settings.showMinor).onChange((v) => this.settings.showMinor = v));
     new import_obsidian.Setting(formEl).setName("Timeline title").setDesc("Optional title drawn at the top of the SVG background.").addText((t) => t.setPlaceholder("e.g. Family context 1800\u20132000").setValue(this.settings.title).onChange((v) => this.settings.title = v));
     new import_obsidian.Setting(formEl).setName("Columns").setDesc("Vertical bands for parallel timelines (e.g. General history | Family). You can change this later with \u201CEdit timeline columns and title\u201D.").addText((t) => t.setValue(String(this.settings.columnCount)).onChange((v) => {
-      this.settings.columnCount = Math.max(1, Math.min(20, Math.floor(Number(v)) || 1));
+      this.settings.columnCount = Math.max(1, Math.min(50, Math.floor(Number(v)) || 1));
       this.renderColumnTitleFields();
     }));
     this.columnTitlesEl = formEl.createDiv({ cls: "timeline-column-titles" });
@@ -695,7 +695,7 @@ class TimelineModal extends import_obsidian.Modal {
   renderColumnTitleFields() {
     if (!this.columnTitlesEl) return;
     this.columnTitlesEl.empty();
-    const count = Math.max(1, Math.min(20, this.settings.columnCount || 1));
+    const count = Math.max(1, Math.min(50, this.settings.columnCount || 1));
     this.settings.columnCount = count;
     while (this.settings.columnTitles.length < count) this.settings.columnTitles.push("");
     this.settings.columnTitles = this.settings.columnTitles.slice(0, count);
@@ -744,8 +744,8 @@ class ColumnsModal extends import_obsidian.Modal {
     new import_obsidian.Setting(contentEl).setName("Timeline title").addText((t) => t.setPlaceholder("Optional").setValue(this.settings.title).onChange((v) => {
       this.settings.title = v;
     }));
-    new import_obsidian.Setting(contentEl).setName("Columns").setDesc("1\u201320. Reducing columns does not delete your cards; only the SVG grid changes.").addText((t) => t.setValue(String(this.settings.columnCount)).onChange((v) => {
-      this.settings.columnCount = Math.max(1, Math.min(20, Math.floor(Number(v)) || 1));
+    new import_obsidian.Setting(contentEl).setName("Columns").setDesc("1\u201350. Reducing columns does not delete your cards; only the SVG grid changes.").addText((t) => t.setValue(String(this.settings.columnCount)).onChange((v) => {
+      this.settings.columnCount = Math.max(1, Math.min(50, Math.floor(Number(v)) || 1));
       this.renderTitles();
     }));
     this.titlesEl = contentEl.createDiv({ cls: "timeline-column-titles" });
@@ -1164,7 +1164,7 @@ function resizeSvgFrame(svgText, newWidth, newHeight) {
   return out;
 }
 function normalizeColumnTitles(titles, count) {
-  const n = Math.max(1, Math.min(20, count || 1));
+  const n = Math.max(1, Math.min(50, count || 1));
   const src = titles ? [...titles] : [];
   while (src.length < n) src.push("");
   return src.slice(0, n).map((t) => (t || "").trim());
@@ -1173,7 +1173,7 @@ const META_PREFIX = "timeline-canvas-meta:";
 function serializeTimelineSettings(settings) {
   const payload = {
     ...settings,
-    columnCount: Math.max(1, Math.min(20, settings.columnCount || 1)),
+    columnCount: Math.max(1, Math.min(50, settings.columnCount || 1)),
     columnTitles: normalizeColumnTitles(settings.columnTitles, settings.columnCount || 1),
     showColumnMonthMarkers: settings.showColumnMonthMarkers === true,
     title: (settings.title || "").trim()
@@ -1187,7 +1187,7 @@ function deserializeTimelineSettings(raw) {
     return {
       ...DEFAULTS,
       ...data,
-      columnCount: Math.max(1, Math.min(20, Number(data.columnCount) || 1)),
+      columnCount: Math.max(1, Math.min(50, Number(data.columnCount) || 1)),
       columnTitles: normalizeColumnTitles(data.columnTitles, Number(data.columnCount) || 1),
       showColumnMonthMarkers: data.showColumnMonthMarkers === true,
       title: typeof data.title === "string" ? data.title : "",
@@ -1238,7 +1238,7 @@ function buildSvg(marks, start, end, s) {
   const left = 180;
   const right = 40;
   const width = Math.max(300, s.timelineWidth);
-  const columns = Math.max(1, Math.min(20, s.columnCount || 1));
+  const columns = Math.max(1, Math.min(50, s.columnCount || 1));
   const titles = normalizeColumnTitles(s.columnTitles, columns);
   const hasTitle = !!(s.title && s.title.trim());
   const headerBand = (hasTitle ? 44 : 0) + (columns > 1 || titles.some((t) => t) ? 36 : 0);
