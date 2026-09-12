@@ -48,7 +48,9 @@ const DEFAULTS = {
   title: "",
   columnCount: 1,
   columnTitles: [""],
-  showColumnMonthMarkers: false
+  showColumnMonthMarkers: false,
+  sections: null,
+  gapPixels: null
 };
 const DEFAULT_PLUGIN_SETTINGS = {
   defaultCanvasFolder: "",
@@ -109,6 +111,16 @@ class TimelineCanvasPlugin extends import_obsidian.Plugin {
       }
     });
     this.addCommand({
+      id: "edit-timeline-sections",
+      name: "Edit timeline sections",
+      checkCallback: (checking) => {
+        const file = this.app.workspace.getActiveFile();
+        if (!file || file.extension !== "canvas") return false;
+        if (!checking) void this.openSectionsModal(file);
+        return true;
+      }
+    });
+    this.addCommand({
       id: "send-timeline-background-to-back",
       name: "Send timeline background to back",
       checkCallback: (checking) => {
@@ -162,10 +174,10 @@ class TimelineCanvasPlugin extends import_obsidian.Plugin {
     new TimelineModal(this.app, defaults, (settings) => this.createTimeline(settings)).open();
   }
   async createTimeline(settings) {
-    const start = parseLocalDate(settings.start);
-    const end = parseLocalDate(settings.end);
-    if (!start || !end || end <= start) {
-      new import_obsidian.Notice("Timeline end must be after the start.");
+    settings = normalizeTimelineSettings(settings);
+    const sections = normalizeSections(settings);
+    if (!sections.length) {
+      new import_obsidian.Notice("Add at least one timeline section with a valid start and end.");
       return;
     }
     if (settings.increment === "custom") {
@@ -174,13 +186,29 @@ class TimelineCanvasPlugin extends import_obsidian.Plugin {
     } else {
       settings.step = Math.max(1, Math.floor(settings.step) || 1);
     }
-    const marks = buildTimelineMarks(start, end, settings);
-    if (marks.length < 1) {
-      new import_obsidian.Notice("The selected range does not contain enough increments.");
+    let totalMarks = 0;
+    for (const sec of sections) {
+      const marks = buildTimelineMarks(sec.startDate, sec.endDate, settings);
+      totalMarks += marks.length;
+      if (marks.length < 1) {
+        new import_obsidian.Notice(`Section ${formatFileDate(sec.startDate)}\u2013${formatFileDate(sec.endDate)} has no increments.`);
+        return;
+      }
+    }
+    if (totalMarks > 2e4) {
+      new import_obsidian.Notice("That would create more than 20,000 timeline marks. Please use a larger increment.");
       return;
     }
-    if (marks.length > 2e4) {
-      new import_obsidian.Notice("That would create more than 20,000 timeline marks. Please use a larger increment.");
+    settings.sections = sections.map((s) => ({ start: s.start, end: s.end }));
+    settings.start = sections[0].start;
+    settings.end = sections[sections.length - 1].end;
+    settings.columnCount = Math.max(1, Math.min(20, Math.floor(settings.columnCount) || 1));
+    settings.columnTitles = normalizeColumnTitles(settings.columnTitles, settings.columnCount);
+    settings.showColumnMonthMarkers = settings.columnCount > 1 && settings.showColumnMonthMarkers === true;
+    settings.title = (settings.title || "").trim();
+    const layout = buildTimelineLayout(settings);
+    if (!layout) {
+      new import_obsidian.Notice("Could not build timeline layout.");
       return;
     }
     const canvasFolder = (0, import_obsidian.normalizePath)(settings.outputFolder.trim());
@@ -189,22 +217,16 @@ class TimelineCanvasPlugin extends import_obsidian.Plugin {
     );
     if (canvasFolder) await this.ensureFolder(canvasFolder);
     if (svgFolder && svgFolder !== canvasFolder) await this.ensureFolder(svgFolder);
-    const base = `Timeline ${formatFileDate(start)}\u2013${formatFileDate(end)}`;
+    const base = `Timeline ${formatFileDate(sections[0].startDate)}\u2013${formatFileDate(sections[sections.length - 1].endDate)}`;
     const canvasPath = await this.uniquePath(`${canvasFolder ? canvasFolder + "/" : ""}${base}.canvas`);
     const svgPath = await this.uniquePath(`${svgFolder ? svgFolder + "/" : ""}${base}.svg`);
-    settings.columnCount = Math.max(1, Math.min(50, Math.floor(settings.columnCount) || 1));
-    settings.columnTitles = normalizeColumnTitles(settings.columnTitles, settings.columnCount);
-    settings.showColumnMonthMarkers = settings.columnCount > 1 && settings.showColumnMonthMarkers === true;
-    settings.title = (settings.title || "").trim();
-    const svg = buildSvg(marks, start, end, settings);
+    const svg = buildSvgFromLayout(layout, settings);
     await this.app.vault.create(svgPath, svg);
     {
       const createdSvg = this.app.vault.getAbstractFileByPath(svgPath);
       if (createdSvg instanceof import_obsidian.TFile) await this.writeSidecarMeta(createdSvg, settings);
     }
-    const intervalCount = settings.increment === "custom" ? Math.max(1, settings.customCount) : Math.max(1, marks.length - 1);
-    const headerExtra = (settings.title ? 40 : 0) + (settings.columnCount > 1 || settings.columnTitles.some((t) => t) ? 36 : 0);
-    const imageHeight = Math.max(600, intervalCount * settings.pixelsPerStep + 220 + headerExtra);
+    const imageHeight = layout.height;
     const canvas = {
       nodes: [{
         id: randomId(),
@@ -223,8 +245,9 @@ class TimelineCanvasPlugin extends import_obsidian.Plugin {
     await this.app.vault.create(canvasPath, JSON.stringify(canvas, null, 2));
     const file = this.app.vault.getAbstractFileByPath(canvasPath);
     if (file instanceof import_obsidian.TFile) await this.app.workspace.getLeaf(true).openFile(file);
-    const description = settings.increment === "custom" ? `${settings.customCount} ${settings.customName.toLowerCase()}` : `${marks.length - 1} increments`;
-    new import_obsidian.Notice(`Created timeline with ${description}.`);
+    const gapNote = sections.length > 1 ? ` (${sections.length} sections)` : "";
+    const description = settings.increment === "custom" ? `${settings.customCount} ${settings.customName.toLowerCase()}` : `${layout.totalIntervals} increments`;
+    new import_obsidian.Notice(`Created timeline with ${description}${gapNote}.`);
   }
   async openWidenModal(canvasFile) {
     try {
@@ -261,16 +284,49 @@ class TimelineCanvasPlugin extends import_obsidian.Plugin {
         return;
       }
       new DateRangeModal(this.app, meta, async (next) => {
-        const topLeftX = ctx.bgNode.x;
-        const topLeftY = ctx.bgNode.y;
-        await this.rebuildTimelineSvg(canvasFile, ctx, next);
-        new import_obsidian.Notice(`Timeline date range updated (background top-left kept at ${Math.round(topLeftX)}, ${Math.round(topLeftY)}).`);
+        // Preserve top-left of the background node so existing cards stay aligned.
+        const originX = ctx.bgNode.x;
+        const originY = ctx.bgNode.y;
+        const result = await this.rebuildTimelineSvg(canvasFile, ctx, next, { remapCards: true });
+        ctx.bgNode.x = originX;
+        ctx.bgNode.y = originY;
+        await this.writeCanvas(canvasFile, ctx.data);
+        if (result && result.orphanedCards > 0) {
+          new import_obsidian.Notice(`Timeline date range updated. ${result.orphanedCards} card(s) adjusted to nearest edge.`);
+        } else {
+          new import_obsidian.Notice("Timeline date range updated. Background top-left position preserved.");
+        }
       }).open();
     } catch (e) {
       new import_obsidian.Notice(e instanceof Error ? e.message : "Could not edit date range.");
     }
   }
-  async openCropModal(canvasFile) {
+  async openSectionsModal(canvasFile) {
+    try {
+      const ctx = await this.loadTimelineContext(canvasFile);
+      const meta = resolveTimelineSettings(ctx) || await this.readSidecarMeta(ctx.svgFile);
+      if (!meta) {
+        new import_obsidian.Notice("No timeline settings found. Recreate the timeline with this plugin version to enable section editing.");
+        return;
+      }
+      new SectionsModal(this.app, meta, async (next) => {
+        const originX = ctx.bgNode.x;
+        const originY = ctx.bgNode.y;
+        const result = await this.rebuildTimelineSvg(canvasFile, ctx, next, { remapCards: true });
+        ctx.bgNode.x = originX;
+        ctx.bgNode.y = originY;
+        await this.writeCanvas(canvasFile, ctx.data);
+        if (result && result.orphanedCards > 0) {
+          new import_obsidian.Notice(`Timeline sections updated. ${result.orphanedCards} card(s) fell in a skipped gap and were moved to the nearest edge.`);
+        } else {
+          new import_obsidian.Notice("Timeline sections updated. Cards repositioned to keep date alignment.");
+        }
+      }).open();
+    } catch (e) {
+      new import_obsidian.Notice(e instanceof Error ? e.message : "Could not edit sections.");
+    }
+  }
+    async openCropModal(canvasFile) {
     try {
       const data = await this.readCanvas(canvasFile);
       if (!data.nodes.length) {
@@ -360,48 +416,46 @@ class TimelineCanvasPlugin extends import_obsidian.Plugin {
     this.applyBackgroundDomState();
     new import_obsidian.Notice(`Timeline widened to ${width}px (legacy SVG \u2014 recreate timeline to preserve headers when widening).`);
   }
-  /**
-   * Fully regenerate the SVG from (possibly edited) settings — used for widening,
-   * column/title edits, and date-range edits alike. The background's top-left
-   * corner (bgNode.x/y) is captured up front and re-applied after regeneration,
-   * so existing Canvas cards never shift regardless of what changed (width,
-   * height from more/fewer increments, columns, etc.).
-   */
-  async rebuildTimelineSvg(canvasFile, ctx, settings) {
-    const topLeftX = ctx.bgNode.x;
-    const topLeftY = ctx.bgNode.y;
-    const start = parseLocalDate(settings.start);
-    const end = parseLocalDate(settings.end);
-    if (!start || !end || end <= start) {
-      new import_obsidian.Notice("Stored timeline dates are invalid; cannot rebuild.");
-      return;
+  /** Fully regenerate the SVG; keep background top-left fixed so cards stay put.
+   *  When opts.remapCards is true (section edits), cards are shifted by date mapping. */
+  async rebuildTimelineSvg(canvasFile, ctx, settings, opts = {}) {
+    settings = normalizeTimelineSettings(settings);
+    const sections = normalizeSections(settings);
+    if (!sections.length) {
+      new import_obsidian.Notice("Stored timeline sections are invalid; cannot rebuild.");
+      return null;
     }
-    settings.columnCount = Math.max(1, Math.min(50, Math.floor(Number(settings.columnCount)) || 1));
+    settings.sections = sections.map((s) => ({ start: s.start, end: s.end }));
+    settings.start = sections[0].start;
+    settings.end = sections[sections.length - 1].end;
+    settings.columnCount = Math.max(1, Math.min(20, Math.floor(Number(settings.columnCount)) || 1));
     settings.columnTitles = normalizeColumnTitles(settings.columnTitles, settings.columnCount);
     settings.showColumnMonthMarkers = settings.columnCount > 1 && settings.showColumnMonthMarkers === true;
     settings.timelineWidth = Math.max(300, Math.floor(Number(settings.timelineWidth)) || 300);
     settings.title = (settings.title || "").trim();
-    const marks = buildTimelineMarks(start, end, settings);
-    if (marks.length < 1) {
-      new import_obsidian.Notice("Could not rebuild timeline marks.");
-      return;
+    const oldMeta = resolveTimelineSettings(ctx) || await this.readSidecarMeta(ctx.svgFile);
+    const oldLayout = oldMeta ? buildTimelineLayout(oldMeta) : null;
+    const layout = buildTimelineLayout(settings);
+    if (!layout) {
+      new import_obsidian.Notice("Could not rebuild timeline layout.");
+      return null;
     }
-    const svg = buildSvg(marks, start, end, settings);
+    let orphanedCards = 0;
+    if (opts.remapCards && oldLayout) {
+      orphanedCards = remapCanvasNodesByDate(ctx.data.nodes, ctx.bgNode, oldLayout, layout);
+    }
+    const svg = buildSvgFromLayout(layout, settings);
     await this.app.vault.modify(ctx.svgFile, svg);
     ctx.svgText = svg;
     await this.writeSidecarMeta(ctx.svgFile, settings);
-    const intervalCount = settings.increment === "custom" ? Math.max(1, settings.customCount) : Math.max(1, marks.length - 1);
-    const headerExtra = (settings.title ? 40 : 0) + (settings.columnCount > 1 || settings.columnTitles.some((t) => t) ? 36 : 0);
-    const imageHeight = Math.max(600, intervalCount * settings.pixelsPerStep + 220 + headerExtra);
     ctx.bgNode.width = settings.timelineWidth;
-    ctx.bgNode.height = imageHeight;
-    ctx.bgNode.x = topLeftX;
-    ctx.bgNode.y = topLeftY;
+    ctx.bgNode.height = layout.height;
     ctx.bgNode.timelineSettings = serializeTimelineSettings(settings);
     markAsTimelineBackground(ctx.bgNode, this.settings.lockBackground);
     if (this.settings.keepBackgroundAtBack) sendNodeToBack(ctx.data, ctx.bgNode);
     await this.writeCanvas(canvasFile, ctx.data);
     this.applyBackgroundDomState();
+    return { orphanedCards, layout };
   }
   async writeSidecarMeta(svgFile, settings) {
     const metaPath = (0, import_obsidian.normalizePath)(svgFile.path.replace(/\.svg$/i, ".timeline-meta.json"));
@@ -577,7 +631,11 @@ class TimelineModal extends import_obsidian.Modal {
     __publicField(this, "customSettingsEl");
     __publicField(this, "standardSettingsEl");
     __publicField(this, "columnTitlesEl");
+    __publicField(this, "sectionsEl");
     this.settings = { ...defaults };
+    if (!Array.isArray(this.settings.sections) || !this.settings.sections.length) {
+      this.settings.sections = [{ start: this.settings.start, end: this.settings.end }];
+    }
     this.onSubmit = onSubmit;
   }
   onOpen() {
@@ -590,8 +648,15 @@ class TimelineModal extends import_obsidian.Modal {
       text: "Creates a vertical timeline as a Canvas image background. Your normal Canvas cards can then be placed over it."
     }).addClass("timeline-help");
     const formEl = contentEl.createDiv({ cls: "timeline-modal-scroll" });
-    new import_obsidian.Setting(formEl).setName("Start date/time").addText((t) => t.setValue(this.settings.start).onChange((v) => this.settings.start = v));
+    new import_obsidian.Setting(formEl).setName("Start date/time").addText((t) => t.setValue(this.settings.start).onChange((v) => {
+      this.settings.start = v;
+      if (!this.settings.sections || this.settings.sections.length <= 1) {
+        // keep single section in sync
+      }
+    }));
     new import_obsidian.Setting(formEl).setName("End date/time").addText((t) => t.setValue(this.settings.end).onChange((v) => this.settings.end = v));
+    this.sectionsEl = formEl.createDiv({ cls: "timeline-sections-settings" });
+    this.renderSectionsFields();
     new import_obsidian.Setting(formEl).setName("Increment").addDropdown((d) => d.addOptions({
       year: "Years",
       quarter: "Quarters",
@@ -624,7 +689,7 @@ class TimelineModal extends import_obsidian.Modal {
     new import_obsidian.Setting(formEl).setName("Show minor lines").addToggle((t) => t.setValue(this.settings.showMinor).onChange((v) => this.settings.showMinor = v));
     new import_obsidian.Setting(formEl).setName("Timeline title").setDesc("Optional title drawn at the top of the SVG background.").addText((t) => t.setPlaceholder("e.g. Family context 1800\u20132000").setValue(this.settings.title).onChange((v) => this.settings.title = v));
     new import_obsidian.Setting(formEl).setName("Columns").setDesc("Vertical bands for parallel timelines (e.g. General history | Family). You can change this later with \u201CEdit timeline columns and title\u201D.").addText((t) => t.setValue(String(this.settings.columnCount)).onChange((v) => {
-      this.settings.columnCount = Math.max(1, Math.min(50, Math.floor(Number(v)) || 1));
+      this.settings.columnCount = Math.max(1, Math.min(20, Math.floor(Number(v)) || 1));
       this.renderColumnTitleFields();
     }));
     this.columnTitlesEl = formEl.createDiv({ cls: "timeline-column-titles" });
@@ -655,13 +720,61 @@ class TimelineModal extends import_obsidian.Modal {
     });
     const createBtn = buttonRow.createEl("button", { text: "Create timeline", cls: "mod-cta" });
     createBtn.addEventListener("click", () => {
+      if (!Array.isArray(this.settings.sections) || this.settings.sections.length <= 1) {
+        this.settings.sections = [{ start: this.settings.start, end: this.settings.end }];
+      } else {
+        this.settings.start = this.settings.sections[0].start;
+        this.settings.end = this.settings.sections[this.settings.sections.length - 1].end;
+      }
       this.close();
-      this.onSubmit({ ...this.settings });
+      this.onSubmit({ ...this.settings, sections: this.settings.sections.map((s) => ({ start: s.start, end: s.end })), columnTitles: [...(this.settings.columnTitles || [])] });
     });
     const cancelBtn = buttonRow.createEl("button", { text: "Cancel" });
     cancelBtn.addEventListener("click", () => this.close());
     const preview = formEl.createEl("div", { cls: "timeline-preview" });
     preview.setText("A new .canvas file will be created. The timeline is a scalable SVG image placed at the back of the Canvas.");
+  }
+  renderSectionsFields() {
+    if (!this.sectionsEl) return;
+    this.sectionsEl.empty();
+    if (!Array.isArray(this.settings.sections) || !this.settings.sections.length) {
+      this.settings.sections = [{ start: this.settings.start, end: this.settings.end }];
+    }
+    const count = this.settings.sections.length;
+    new import_obsidian.Setting(this.sectionsEl).setName("Sections").setDesc("Use more than one section to skip time periods. Gaps between sections are drawn with a zig-zag break.").addText((t) => t.setValue(String(count)).onChange((v) => {
+      const n = Math.max(1, Math.min(20, Math.floor(Number(v)) || 1));
+      while (this.settings.sections.length < n) {
+        const last = this.settings.sections[this.settings.sections.length - 1];
+        this.settings.sections.push({ start: last.end, end: last.end });
+      }
+      this.settings.sections = this.settings.sections.slice(0, n);
+      if (n === 1) {
+        this.settings.sections[0].start = this.settings.start;
+        this.settings.sections[0].end = this.settings.end;
+      }
+      this.renderSectionsFields();
+    }));
+    if (count > 1) {
+      for (let i = 0; i < count; i++) {
+        const idx = i;
+        new import_obsidian.Setting(this.sectionsEl).setName(`Section ${idx + 1} start`).addText((t) => t.setValue(this.settings.sections[idx].start || "").onChange((v) => {
+          this.settings.sections[idx].start = v.trim();
+          if (idx === 0) this.settings.start = v.trim();
+        }));
+        new import_obsidian.Setting(this.sectionsEl).setName(`Section ${idx + 1} end`).addText((t) => t.setValue(this.settings.sections[idx].end || "").onChange((v) => {
+          this.settings.sections[idx].end = v.trim();
+          if (idx === count - 1) this.settings.end = v.trim();
+        }));
+      }
+      new import_obsidian.Setting(this.sectionsEl).setName("Gap size (px)").setDesc("Vertical space for each skipped period. Default matches pixels between increments.").addText((t) => t.setValue(this.settings.gapPixels == null ? "" : String(this.settings.gapPixels)).setPlaceholder(String(this.settings.pixelsPerStep || 140)).onChange((v) => {
+        const n = Number(v);
+        this.settings.gapPixels = v.trim() === "" || !isFinite(n) ? null : Math.max(20, n);
+      }));
+      this.sectionsEl.createEl("div", {
+        text: "Overall Start/End above still define the first and last boundaries when you use one section. With multiple sections, edit each range here.",
+        cls: "timeline-custom-help"
+      });
+    }
   }
   renderIncrementFields() {
     if (!this.standardSettingsEl || !this.customSettingsEl) return;
@@ -695,7 +808,7 @@ class TimelineModal extends import_obsidian.Modal {
   renderColumnTitleFields() {
     if (!this.columnTitlesEl) return;
     this.columnTitlesEl.empty();
-    const count = Math.max(1, Math.min(50, this.settings.columnCount || 1));
+    const count = Math.max(1, Math.min(20, this.settings.columnCount || 1));
     this.settings.columnCount = count;
     while (this.settings.columnTitles.length < count) this.settings.columnTitles.push("");
     this.settings.columnTitles = this.settings.columnTitles.slice(0, count);
@@ -744,8 +857,8 @@ class ColumnsModal extends import_obsidian.Modal {
     new import_obsidian.Setting(contentEl).setName("Timeline title").addText((t) => t.setPlaceholder("Optional").setValue(this.settings.title).onChange((v) => {
       this.settings.title = v;
     }));
-    new import_obsidian.Setting(contentEl).setName("Columns").setDesc("1\u201350. Reducing columns does not delete your cards; only the SVG grid changes.").addText((t) => t.setValue(String(this.settings.columnCount)).onChange((v) => {
-      this.settings.columnCount = Math.max(1, Math.min(50, Math.floor(Number(v)) || 1));
+    new import_obsidian.Setting(contentEl).setName("Columns").setDesc("1\u201320. Reducing columns does not delete your cards; only the SVG grid changes.").addText((t) => t.setValue(String(this.settings.columnCount)).onChange((v) => {
+      this.settings.columnCount = Math.max(1, Math.min(20, Math.floor(Number(v)) || 1));
       this.renderTitles();
     }));
     this.titlesEl = contentEl.createDiv({ cls: "timeline-column-titles" });
@@ -782,12 +895,94 @@ class ColumnsModal extends import_obsidian.Modal {
     this.contentEl.empty();
   }
 }
+class SectionsModal extends import_obsidian.Modal {
+  constructor(app, settings, onSubmit) {
+    super(app);
+    __publicField(this, "settings");
+    __publicField(this, "onSubmit");
+    __publicField(this, "listEl");
+    const base = normalizeTimelineSettings({ ...settings });
+    const secs = normalizeSections(base).map((s) => ({ start: s.start, end: s.end }));
+    this.settings = {
+      ...base,
+      sections: secs.length ? secs : [{ start: base.start, end: base.end }],
+      gapPixels: base.gapPixels
+    };
+    this.onSubmit = onSubmit;
+  }
+  onOpen() {
+    this.modalEl.addClass("timeline-canvas-modal");
+    this.titleEl.setText("Edit timeline sections");
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.createEl("p", {
+      text: "Split the timeline into continuous sections with visual gaps for skipped periods. Cards are repositioned by date when you apply changes. Cards that land in a removed gap move to the nearest remaining edge.",
+      cls: "timeline-help"
+    });
+    this.listEl = contentEl.createDiv({ cls: "timeline-sections-settings" });
+    this.renderList();
+    new import_obsidian.Setting(contentEl).addButton((b) => b.setButtonText("Apply").setCta().onClick(() => {
+      const normalized = normalizeSections(this.settings);
+      if (!normalized.length) {
+        new import_obsidian.Notice("Add at least one valid section (end must be after start).");
+        return;
+      }
+      for (let i = 1; i < normalized.length; i++) {
+        if (normalized[i].startDate < normalized[i - 1].endDate) {
+          new import_obsidian.Notice(`Section ${i + 1} overlaps the previous section.`);
+          return;
+        }
+      }
+      this.settings.sections = normalized.map((s) => ({ start: s.start, end: s.end }));
+      this.settings.start = normalized[0].start;
+      this.settings.end = normalized[normalized.length - 1].end;
+      this.close();
+      this.onSubmit({ ...this.settings, sections: this.settings.sections.map((s) => ({ start: s.start, end: s.end })) });
+    })).addButton((b) => b.setButtonText("Cancel").onClick(() => this.close()));
+  }
+  renderList() {
+    if (!this.listEl) return;
+    this.listEl.empty();
+    const count = this.settings.sections.length;
+    new import_obsidian.Setting(this.listEl).setName("Number of sections").setDesc("1 = continuous timeline (current behavior). 2+ adds skip gaps between ranges.").addText((t) => t.setValue(String(count)).onChange((v) => {
+      const n = Math.max(1, Math.min(20, Math.floor(Number(v)) || 1));
+      while (this.settings.sections.length < n) {
+        const last = this.settings.sections[this.settings.sections.length - 1];
+        this.settings.sections.push({ start: last.end, end: last.end });
+      }
+      this.settings.sections = this.settings.sections.slice(0, n);
+      this.renderList();
+    }));
+    for (let i = 0; i < this.settings.sections.length; i++) {
+      const idx = i;
+      new import_obsidian.Setting(this.listEl).setName(`Section ${idx + 1} start`).addText((t) => t.setValue(this.settings.sections[idx].start || "").onChange((v) => {
+        this.settings.sections[idx].start = v.trim();
+      }));
+      new import_obsidian.Setting(this.listEl).setName(`Section ${idx + 1} end`).addText((t) => t.setValue(this.settings.sections[idx].end || "").onChange((v) => {
+        this.settings.sections[idx].end = v.trim();
+      }));
+    }
+    if (this.settings.sections.length > 1) {
+      new import_obsidian.Setting(this.listEl).setName("Gap size (px)").setDesc("Height of each zig-zag skip band. Leave blank to match pixels between increments.").addText((t) => t.setValue(this.settings.gapPixels == null ? "" : String(this.settings.gapPixels)).setPlaceholder(String(this.settings.pixelsPerStep || 140)).onChange((v) => {
+        const n = Number(v);
+        this.settings.gapPixels = v.trim() === "" || !isFinite(n) ? null : Math.max(20, n);
+      }));
+    }
+  }
+  onClose() {
+    this.contentEl.empty();
+  }
+}
 class DateRangeModal extends import_obsidian.Modal {
   constructor(app, settings, onSubmit) {
     super(app);
     __publicField(this, "settings");
     __publicField(this, "onSubmit");
-    this.settings = { ...settings };
+    this.settings = {
+      ...settings,
+      start: settings.start || DEFAULTS.start,
+      end: settings.end || DEFAULTS.end
+    };
     this.onSubmit = onSubmit;
   }
   onOpen() {
@@ -796,38 +991,26 @@ class DateRangeModal extends import_obsidian.Modal {
     const { contentEl } = this;
     contentEl.empty();
     contentEl.createEl("p", {
-      text: "Change the start and/or end date of this timeline. The background is regenerated with all current customizations (increment, columns, title, colors, etc.) applied to the new range. The background's top-left corner stays exactly where it is, so existing Canvas cards are not moved.",
+      text: "Change the start and/or end of the timeline. The SVG is regenerated with the same columns, title, spacing, and other customizations. The background stays anchored at its current top-left corner so cards already on the canvas keep their alignment.",
       cls: "timeline-help"
     });
-    new import_obsidian.Setting(contentEl).setName("Start date/time").addText((t) => t.setValue(this.settings.start).onChange((v) => {
-      this.settings.start = v;
+    new import_obsidian.Setting(contentEl).setName("Start date/time").setDesc("YYYY-MM-DD or with time, e.g. 2001-01-01").addText((t) => t.setValue(this.settings.start).onChange((v) => {
+      this.settings.start = v.trim();
     }));
-    new import_obsidian.Setting(contentEl).setName("End date/time").addText((t) => t.setValue(this.settings.end).onChange((v) => {
-      this.settings.end = v;
+    new import_obsidian.Setting(contentEl).setName("End date/time").setDesc("Must be after the start. Extending the end lengthens the timeline downward.").addText((t) => t.setValue(this.settings.end).onChange((v) => {
+      this.settings.end = v.trim();
     }));
-    const incrementLabel = this.settings.increment === "custom" ? `Custom (${this.settings.customName || "Period"})` : `${this.settings.increment}, every ${this.settings.step || 1}`;
-    contentEl.createEl("div", {
-      text: `Increment: ${incrementLabel}. This command only changes the date range \u2014 to change the increment type or size, recreate the timeline instead.`,
-      cls: "timeline-custom-help"
-    });
-    if (this.settings.increment === "custom") {
-      new import_obsidian.Setting(contentEl).setName("Number of occurrences").setDesc("How many equally spaced custom increments should appear across the new date range.").addText((t) => t.setValue(String(this.settings.customCount)).onChange((v) => {
-        this.settings.customCount = Math.max(1, Math.floor(Number(v)) || 1);
-      }));
-    }
     new import_obsidian.Setting(contentEl).addButton((b) => b.setButtonText("Apply").setCta().onClick(() => {
       const start = parseLocalDate(this.settings.start);
       const end = parseLocalDate(this.settings.end);
-      if (!start || !end) {
-        new import_obsidian.Notice("Enter valid dates in YYYY-MM-DD format (optionally with a time).");
-        return;
-      }
-      if (end <= start) {
+      if (!start || !end || end <= start) {
         new import_obsidian.Notice("Timeline end must be after the start.");
         return;
       }
+      // Date-range edit collapses to a single continuous section.
+      this.settings.sections = [{ start: this.settings.start, end: this.settings.end }];
       this.close();
-      this.onSubmit({ ...this.settings });
+      this.onSubmit({ ...this.settings, sections: [{ start: this.settings.start, end: this.settings.end }] });
     })).addButton((b) => b.setButtonText("Cancel").onClick(() => this.close()));
   }
   onClose() {
@@ -1164,7 +1347,7 @@ function resizeSvgFrame(svgText, newWidth, newHeight) {
   return out;
 }
 function normalizeColumnTitles(titles, count) {
-  const n = Math.max(1, Math.min(50, count || 1));
+  const n = Math.max(1, Math.min(20, count || 1));
   const src = titles ? [...titles] : [];
   while (src.length < n) src.push("");
   return src.slice(0, n).map((t) => (t || "").trim());
@@ -1173,10 +1356,12 @@ const META_PREFIX = "timeline-canvas-meta:";
 function serializeTimelineSettings(settings) {
   const payload = {
     ...settings,
-    columnCount: Math.max(1, Math.min(50, settings.columnCount || 1)),
+    columnCount: Math.max(1, Math.min(20, settings.columnCount || 1)),
     columnTitles: normalizeColumnTitles(settings.columnTitles, settings.columnCount || 1),
     showColumnMonthMarkers: settings.showColumnMonthMarkers === true,
-    title: (settings.title || "").trim()
+    title: (settings.title || "").trim(),
+    sections: Array.isArray(settings.sections) && settings.sections.length ? settings.sections.map((s) => ({ start: s.start, end: s.end })) : null,
+    gapPixels: settings.gapPixels == null ? null : Number(settings.gapPixels)
   };
   return JSON.stringify(payload);
 }
@@ -1184,14 +1369,17 @@ function deserializeTimelineSettings(raw) {
   if (!raw || typeof raw !== "string") return null;
   try {
     const data = JSON.parse(raw);
+    const sections = Array.isArray(data.sections) && data.sections.length ? data.sections.map((s) => ({ start: String(s.start || ""), end: String(s.end || "") })) : null;
     return {
       ...DEFAULTS,
       ...data,
-      columnCount: Math.max(1, Math.min(50, Number(data.columnCount) || 1)),
+      columnCount: Math.max(1, Math.min(20, Number(data.columnCount) || 1)),
       columnTitles: normalizeColumnTitles(data.columnTitles, Number(data.columnCount) || 1),
       showColumnMonthMarkers: data.showColumnMonthMarkers === true,
       title: typeof data.title === "string" ? data.title : "",
-      timelineWidth: Math.max(300, Number(data.timelineWidth) || DEFAULTS.timelineWidth)
+      timelineWidth: Math.max(300, Number(data.timelineWidth) || DEFAULTS.timelineWidth),
+      sections,
+      gapPixels: data.gapPixels == null || data.gapPixels === "" ? null : Math.max(20, Number(data.gapPixels) || 20)
     };
   } catch (e) {
     return null;
@@ -1234,20 +1422,230 @@ function parseTimelineMeta(svgText) {
 function resolveTimelineSettings(ctx) {
   return parseTimelineMeta(ctx.svgText) || deserializeTimelineSettings(ctx.bgNode.timelineSettings) || null;
 }
-function buildSvg(marks, start, end, s) {
+function normalizeTimelineSettings(settings) {
+  const s = { ...DEFAULTS, ...settings };
+  s.columnCount = Math.max(1, Math.min(20, Math.floor(Number(s.columnCount)) || 1));
+  s.columnTitles = normalizeColumnTitles(s.columnTitles, s.columnCount);
+  s.pixelsPerStep = Math.max(20, Number(s.pixelsPerStep) || 140);
+  s.timelineWidth = Math.max(300, Math.floor(Number(s.timelineWidth)) || 300);
+  s.title = (s.title || "").trim();
+  s.step = Math.max(1, Math.floor(Number(s.step)) || 1);
+  s.customCount = Math.max(1, Math.floor(Number(s.customCount)) || 1);
+  if (s.gapPixels != null && s.gapPixels !== "") s.gapPixels = Math.max(20, Number(s.gapPixels) || 20);
+  else s.gapPixels = null;
+  if (!Array.isArray(s.sections) || !s.sections.length) {
+    s.sections = null;
+  }
+  return s;
+}
+/** Returns validated section list with Date objects. Empty if none valid. */
+function normalizeSections(settings) {
+  const raw = Array.isArray(settings.sections) && settings.sections.length ? settings.sections : [{ start: settings.start, end: settings.end }];
+  const out = [];
+  for (const sec of raw) {
+    const start = parseLocalDate(String(sec.start || "").trim());
+    const end = parseLocalDate(String(sec.end || "").trim());
+    if (!start || !end || end <= start) continue;
+    out.push({
+      start: `${start.getFullYear()}-${pad(start.getMonth() + 1)}-${pad(start.getDate())}` + (start.getHours() || start.getMinutes() ? ` ${pad(start.getHours())}:${pad(start.getMinutes())}` : ""),
+      end: `${end.getFullYear()}-${pad(end.getMonth() + 1)}-${pad(end.getDate())}` + (end.getHours() || end.getMinutes() ? ` ${pad(end.getHours())}:${pad(end.getMinutes())}` : ""),
+      startDate: start,
+      endDate: end
+    });
+  }
+  out.sort((a, b) => a.startDate - b.startDate);
+  return out;
+}
+function effectiveGapPixels(settings) {
+  if (settings.gapPixels != null && isFinite(Number(settings.gapPixels))) return Math.max(20, Number(settings.gapPixels));
+  return Math.max(20, Number(settings.pixelsPerStep) || 140);
+}
+/**
+ * Build full layout: section bands, gap bands, absolute Y for marks, height.
+ * Provides dateToY / yToDateInfo for card remapping.
+ */
+function buildTimelineLayout(settings) {
+  settings = normalizeTimelineSettings(settings);
+  const sections = normalizeSections(settings);
+  if (!sections.length) return null;
+  const pixelsPerStep = settings.pixelsPerStep;
+  const gapPx = effectiveGapPixels(settings);
+  const columns = settings.columnCount;
+  const titles = normalizeColumnTitles(settings.columnTitles, columns);
+  const hasTitle = !!(settings.title && settings.title.trim());
+  const headerBand = (hasTitle ? 44 : 0) + (columns > 1 || titles.some((t) => t) ? 36 : 0);
+  const contentTop = 50 + headerBand;
+  const layoutSections = [];
+  let y = contentTop;
+  let totalIntervals = 0;
+  let totalMarks = 0;
+  for (let i = 0; i < sections.length; i++) {
+    const sec = sections[i];
+    const marks = buildTimelineMarks(sec.startDate, sec.endDate, settings);
+    if (marks.length < 1) continue;
+    const intervalCount = settings.increment === "custom" ? Math.max(1, settings.customCount) : Math.max(1, marks.length - 1);
+    const sectionHeight = intervalCount * pixelsPerStep;
+    const sectionTop = y;
+    const sectionBottom = y + sectionHeight;
+    const marksWithY = marks.map((m) => ({
+      ...m,
+      y: sectionTop + m.position * sectionHeight
+    }));
+    totalIntervals += intervalCount;
+    totalMarks += marks.length;
+    const entry = {
+      index: layoutSections.length,
+      start: sec.start,
+      end: sec.end,
+      startDate: sec.startDate,
+      endDate: sec.endDate,
+      marks: marksWithY,
+      top: sectionTop,
+      bottom: sectionBottom,
+      height: sectionHeight,
+      gapAfter: null
+    };
+    y = sectionBottom;
+    if (i < sections.length - 1) {
+      entry.gapAfter = { top: y, bottom: y + gapPx, height: gapPx };
+      y += gapPx;
+    }
+    layoutSections.push(entry);
+  }
+  if (!layoutSections.length) return null;
+  const contentBottom = y;
+  const height = Math.max(600, contentBottom + 90);
+  const layout = {
+    settings,
+    sections: layoutSections,
+    contentTop,
+    contentBottom,
+    height,
+    headerBand,
+    totalIntervals,
+    totalMarks,
+    gapPixels: gapPx,
+    pixelsPerStep
+  };
+  layout.dateToY = (date) => dateToY(date, layout);
+  layout.yToDateInfo = (localY) => yToDateInfo(localY, layout);
+  return layout;
+}
+function dateToY(date, layout) {
+  const t = date instanceof Date ? date.getTime() : date;
+  const sections = layout.sections;
+  if (!sections.length) return layout.contentTop;
+  const first = sections[0];
+  const last = sections[sections.length - 1];
+  if (t <= first.startDate.getTime()) {
+    const span = first.endDate.getTime() - first.startDate.getTime();
+    const rate = span > 0 ? (first.bottom - first.top) / span : 0;
+    return first.top + (t - first.startDate.getTime()) * rate;
+  }
+  if (t >= last.endDate.getTime()) {
+    const span = last.endDate.getTime() - last.startDate.getTime();
+    const rate = span > 0 ? (last.bottom - last.top) / span : 0;
+    return last.bottom + (t - last.endDate.getTime()) * rate;
+  }
+  for (const sec of sections) {
+    if (t >= sec.startDate.getTime() && t <= sec.endDate.getTime()) {
+      const span = sec.endDate.getTime() - sec.startDate.getTime();
+      if (span <= 0) return sec.top;
+      const frac = (t - sec.startDate.getTime()) / span;
+      return sec.top + frac * (sec.bottom - sec.top);
+    }
+  }
+  // In a calendar gap between sections: nearest edge
+  for (let i = 0; i < sections.length - 1; i++) {
+    const a = sections[i];
+    const b = sections[i + 1];
+    if (t > a.endDate.getTime() && t < b.startDate.getTime()) {
+      const mid = (a.endDate.getTime() + b.startDate.getTime()) / 2;
+      return t < mid ? a.bottom : b.top;
+    }
+  }
+  return first.top;
+}
+function yToDateInfo(localY, layout) {
+  const sections = layout.sections;
+  if (!sections.length) return { kind: "above", offset: 0, date: null };
+  const first = sections[0];
+  const last = sections[sections.length - 1];
+  if (localY < first.top) {
+    return { kind: "above", offset: localY - first.top, date: first.startDate };
+  }
+  if (localY > last.bottom) {
+    return { kind: "below", offset: localY - last.bottom, date: last.endDate };
+  }
+  for (const sec of sections) {
+    if (localY >= sec.top && localY <= sec.bottom) {
+      const span = sec.endDate.getTime() - sec.startDate.getTime();
+      const frac = sec.height > 0 ? (localY - sec.top) / sec.height : 0;
+      const date = new Date(sec.startDate.getTime() + frac * span);
+      return { kind: "content", date, sectionIndex: sec.index };
+    }
+    if (sec.gapAfter && localY > sec.gapAfter.top && localY < sec.gapAfter.bottom) {
+      const next = sections[sec.index + 1];
+      const distPrev = localY - sec.gapAfter.top;
+      const distNext = sec.gapAfter.bottom - localY;
+      const nearestDate = distPrev <= distNext ? sec.endDate : next ? next.startDate : sec.endDate;
+      return { kind: "gap", date: nearestDate, nearestDate, sectionIndex: sec.index };
+    }
+  }
+  return { kind: "content", date: first.startDate, sectionIndex: 0 };
+}
+function remapCanvasNodesByDate(nodes, bgNode, oldLayout, newLayout) {
+  let orphaned = 0;
+  const bgY = bgNode.y || 0;
+  for (const node of nodes) {
+    if (node.timelineBackground) continue;
+    if (node === bgNode) continue;
+    const centerY = (node.y || 0) + (node.height || 0) / 2;
+    const localY = centerY - bgY;
+    const info = oldLayout.yToDateInfo(localY);
+    let newLocalCenter;
+    if (info.kind === "above") {
+      newLocalCenter = newLayout.sections[0].top + info.offset;
+    } else if (info.kind === "below") {
+      newLocalCenter = newLayout.sections[newLayout.sections.length - 1].bottom + info.offset;
+    } else if (info.kind === "gap") {
+      orphaned++;
+      newLocalCenter = newLayout.dateToY(info.nearestDate || info.date);
+    } else {
+      newLocalCenter = newLayout.dateToY(info.date);
+    }
+    node.y = newLocalCenter - (node.height || 0) / 2 + bgY;
+  }
+  return orphaned;
+}
+function zigZagPath(x, y1, y2, amplitude, waves) {
+  const h = y2 - y1;
+  if (h <= 0) return `M ${x} ${y1} L ${x} ${y2}`;
+  const n = Math.max(2, waves || 4);
+  const seg = h / n;
+  let d = `M ${x} ${y1.toFixed(2)}`;
+  for (let i = 0; i < n; i++) {
+    const ym = y1 + seg * (i + 0.5);
+    const ye = y1 + seg * (i + 1);
+    const dir = i % 2 === 0 ? 1 : -1;
+    d += ` L ${(x + dir * amplitude).toFixed(2)} ${ym.toFixed(2)} L ${x.toFixed(2)} ${ye.toFixed(2)}`;
+  }
+  return d;
+}
+function buildSvgFromLayout(layout, s) {
   const left = 180;
   const right = 40;
   const width = Math.max(300, s.timelineWidth);
-  const columns = Math.max(1, Math.min(50, s.columnCount || 1));
+  const columns = Math.max(1, Math.min(20, s.columnCount || 1));
   const titles = normalizeColumnTitles(s.columnTitles, columns);
   const hasTitle = !!(s.title && s.title.trim());
-  const headerBand = (hasTitle ? 44 : 0) + (columns > 1 || titles.some((t) => t) ? 36 : 0);
-  const intervalCount = s.increment === "custom" ? Math.max(1, s.customCount) : Math.max(1, marks.length - 1);
-  const height = Math.max(600, intervalCount * s.pixelsPerStep + 180 + headerBand);
+  const height = layout.height;
   const lineX = left;
   const lineEnd = width - right;
   const labelX = 20;
   const showColumnMonthMarkers = columns > 1 && s.showColumnMonthMarkers === true;
+  const top = layout.contentTop;
+  const bottom = layout.contentBottom;
   const parts = [];
   const metaB64 = encodeSettingsBase64(s);
   parts.push(`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" data-timeline-settings="${metaB64}">`);
@@ -1258,10 +1656,6 @@ function buildSvg(marks, start, end, s) {
     parts.push(`<text x="${width / 2}" y="${cursorY}" text-anchor="middle" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="26" font-weight="700" fill="${escapeXml(s.labelColor)}">${escapeXml(s.title.trim())}</text>`);
     cursorY += 36;
   }
-  const contentTop = 50 + headerBand;
-  const top = contentTop;
-  const bottom = height - 90;
-  const yFor = (position) => top + position * (bottom - top);
   const colWidth = Math.max(40, (lineEnd - lineX) / columns);
   if (columns > 1 || titles.some((t) => t)) {
     const headerY = hasTitle ? 58 : 32;
@@ -1273,33 +1667,76 @@ function buildSvg(marks, start, end, s) {
       }
       if (i > 0) {
         const dx = lineX + colWidth * i;
-        parts.push(`<line x1="${dx.toFixed(2)}" y1="${top - 24}" x2="${dx.toFixed(2)}" y2="${bottom + 20}" stroke="${escapeXml(s.majorLineColor)}" stroke-width="1.5" stroke-dasharray="6 4" opacity="0.7"/>`);
+        // Column dividers: straight through sections, zig-zag through gaps
+        let pathD = `M ${dx.toFixed(2)} ${(top - 24).toFixed(2)}`;
+        for (const sec of layout.sections) {
+          pathD += ` L ${dx.toFixed(2)} ${sec.top.toFixed(2)} L ${dx.toFixed(2)} ${sec.bottom.toFixed(2)}`;
+          if (sec.gapAfter) {
+            const waves = Math.max(3, Math.round(sec.gapAfter.height / 16));
+            const h = sec.gapAfter.bottom - sec.gapAfter.top;
+            const seg = h / waves;
+            for (let wi = 0; wi < waves; wi++) {
+              const ym = sec.gapAfter.top + seg * (wi + 0.5);
+              const ye = sec.gapAfter.top + seg * (wi + 1);
+              const dir = wi % 2 === 0 ? 1 : -1;
+              pathD += ` L ${(dx + dir * 6).toFixed(2)} ${ym.toFixed(2)} L ${dx.toFixed(2)} ${ye.toFixed(2)}`;
+            }
+          }
+        }
+        pathD += ` L ${dx.toFixed(2)} ${(bottom + 20).toFixed(2)}`;
+        parts.push(`<path d="${pathD}" fill="none" stroke="${escapeXml(s.majorLineColor)}" stroke-width="1.5" stroke-dasharray="6 4" opacity="0.7"/>`);
       }
     }
   }
+  // Outer boundary lines at overall top/bottom of content
   parts.push(`<line x1="${lineX}" y1="${top}" x2="${lineEnd}" y2="${top}" stroke="${escapeXml(s.majorLineColor)}" stroke-width="2.5" opacity="0.9"/>`);
   parts.push(`<line x1="${lineX}" y1="${bottom}" x2="${lineEnd}" y2="${bottom}" stroke="${escapeXml(s.majorLineColor)}" stroke-width="2.5" opacity="0.9"/>`);
-  parts.push(`<text x="${labelX}" y="${top + 6}" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="20" font-weight="600" fill="${escapeXml(s.labelColor)}">${escapeXml(formatBoundaryLabel(start, s.labelFormat, s.increment))}</text>`);
-  parts.push(`<text x="${labelX}" y="${bottom + 6}" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="20" font-weight="600" fill="${escapeXml(s.labelColor)}">${escapeXml(formatBoundaryLabel(end, s.labelFormat, s.increment))}</text>`);
-  for (const mark of marks) {
-    const y = yFor(mark.position);
-    const major = mark.major;
-    const lineWidth = major ? 2.5 : 1;
-    const color = major ? s.majorLineColor : s.lineColor;
-    if (s.showMinor || major) {
-      parts.push(`<line x1="${lineX}" y1="${y.toFixed(2)}" x2="${lineEnd}" y2="${y.toFixed(2)}" stroke="${escapeXml(color)}" stroke-width="${lineWidth}" opacity="${major ? 0.9 : 0.55}"/>`);
+  // Section content marks
+  for (const sec of layout.sections) {
+    for (const mark of sec.marks) {
+      const y = mark.y;
+      const major = mark.major;
+      const lineWidth = major ? 2.5 : 1;
+      const color = major ? s.majorLineColor : s.lineColor;
+      if (s.showMinor || major) {
+        parts.push(`<line x1="${lineX}" y1="${y.toFixed(2)}" x2="${lineEnd}" y2="${y.toFixed(2)}" stroke="${escapeXml(color)}" stroke-width="${lineWidth}" opacity="${major ? 0.9 : 0.55}"/>`);
+      }
+      parts.push(`<text x="${labelX}" y="${(y + 6).toFixed(2)}" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="${major ? 20 : 16}" font-weight="${major ? 600 : 400}" fill="${escapeXml(s.labelColor)}">${escapeXml(mark.label)}</text>`);
     }
-    parts.push(`<text x="${labelX}" y="${(y + 6).toFixed(2)}" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="${major ? 20 : 16}" font-weight="${major ? 600 : 400}" fill="${escapeXml(s.labelColor)}">${escapeXml(mark.label)}</text>`);
+    // Gap band visuals
+    if (sec.gapAfter) {
+      const g = sec.gapAfter;
+      const midY = (g.top + g.bottom) / 2;
+      // Subtle band
+      parts.push(`<rect x="${lineX}" y="${g.top.toFixed(2)}" width="${(lineEnd - lineX).toFixed(2)}" height="${g.height.toFixed(2)}" fill="${escapeXml(s.majorLineColor)}" opacity="0.04"/>`);
+      // Zig-zag across full width (light)
+      const zig = zigZagPath(lineX + (lineEnd - lineX) * 0.15, g.top + 4, g.bottom - 4, 5, Math.max(3, Math.round(g.height / 14)));
+      // Draw several parallel zigzags as break indicator on the spine area
+      for (let k = 0; k < Math.min(columns, 3); k++) {
+        const zx = lineX + colWidth * (k + 0.5);
+        const zd = zigZagPath(zx, g.top + 2, g.bottom - 2, 7, Math.max(3, Math.round(g.height / 14)));
+        parts.push(`<path d="${zd}" fill="none" stroke="${escapeXml(s.majorLineColor)}" stroke-width="1.25" opacity="0.45"/>`);
+      }
+      // Omitted label
+      const next = layout.sections[sec.index + 1];
+      const gapLabel = next ? `${formatBoundaryLabel(sec.endDate, s.labelFormat, s.increment)} \u2013 ${formatBoundaryLabel(next.startDate, s.labelFormat, s.increment)} omitted` : "gap";
+      parts.push(`<text x="${((lineX + lineEnd) / 2).toFixed(2)}" y="${(midY + 4).toFixed(2)}" text-anchor="middle" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="11" fill="${escapeXml(s.labelColor)}" opacity="0.5">${escapeXml(gapLabel)}</text>`);
+    }
   }
+  // Start/end boundary labels for first and last section
+  const firstSec = layout.sections[0];
+  const lastSec = layout.sections[layout.sections.length - 1];
+  parts.push(`<text x="${labelX}" y="${top + 6}" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="20" font-weight="600" fill="${escapeXml(s.labelColor)}">${escapeXml(formatBoundaryLabel(firstSec.startDate, s.labelFormat, s.increment))}</text>`);
+  parts.push(`<text x="${labelX}" y="${bottom + 6}" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="20" font-weight="600" fill="${escapeXml(s.labelColor)}">${escapeXml(formatBoundaryLabel(lastSec.endDate, s.labelFormat, s.increment))}</text>`);
   if (showColumnMonthMarkers) {
-    const markerLines = [
-      { y: top, date: start },
-      ...marks.filter((mark) => s.showMinor || mark.major).map((mark) => ({
-        y: yFor(mark.position),
-        date: mark.date || new Date(start.getTime() + (end.getTime() - start.getTime()) * mark.position)
-      })),
-      { y: bottom, date: end }
-    ];
+    const markerLines = [];
+    for (const sec of layout.sections) {
+      markerLines.push({ y: sec.top, date: sec.startDate });
+      for (const mark of sec.marks) {
+        if (s.showMinor || mark.major) markerLines.push({ y: mark.y, date: mark.date || sec.startDate });
+      }
+      markerLines.push({ y: sec.bottom, date: sec.endDate });
+    }
     const renderedLines = /* @__PURE__ */ new Set();
     for (const marker of markerLines) {
       const key = marker.y.toFixed(2);
@@ -1318,6 +1755,15 @@ function buildSvg(marks, start, end, s) {
   }
   parts.push("</svg>");
   return parts.join("");
+}
+/** Legacy wrapper for any callers still passing marks/start/end. */
+function buildSvg(marks, start, end, s) {
+  const layout = buildTimelineLayout({ ...s, start: formatFileDate(start), end: formatFileDate(end), sections: [{ start: formatFileDate(start), end: formatFileDate(end) }] });
+  if (!layout) {
+    // fallback minimal
+    return `<svg xmlns="http://www.w3.org/2000/svg" width="${s.timelineWidth}" height="600"></svg>`;
+  }
+  return buildSvgFromLayout(layout, s);
 }
 function isMajor(index, date, s) {
   if (index === 0) return true;

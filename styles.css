@@ -56,3 +56,13 @@
 .workspace-leaf-content[data-type="canvas"] .canvas-wrapper .canvas-node.is-timeline-bg-locked {
   pointer-events: none;
 }
+
+.timeline-canvas-modal .timeline-sections-settings {
+  margin: 8px 0 12px 0;
+  padding: 8px 10px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+}
+.timeline-canvas-modal .timeline-sections-settings .setting-item {
+  padding-top: 6px;
+}
