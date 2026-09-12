@@ -99,6 +99,16 @@ class TimelineCanvasPlugin extends import_obsidian.Plugin {
       }
     });
     this.addCommand({
+      id: "edit-timeline-date-range",
+      name: "Edit timeline date range",
+      checkCallback: (checking) => {
+        const file = this.app.workspace.getActiveFile();
+        if (!file || file.extension !== "canvas") return false;
+        if (!checking) void this.openDateRangeModal(file);
+        return true;
+      }
+    });
+    this.addCommand({
       id: "send-timeline-background-to-back",
       name: "Send timeline background to back",
       checkCallback: (checking) => {
@@ -242,6 +252,24 @@ class TimelineCanvasPlugin extends import_obsidian.Plugin {
       new import_obsidian.Notice(e instanceof Error ? e.message : "Could not edit columns.");
     }
   }
+  async openDateRangeModal(canvasFile) {
+    try {
+      const ctx = await this.loadTimelineContext(canvasFile);
+      const meta = resolveTimelineSettings(ctx) || await this.readSidecarMeta(ctx.svgFile);
+      if (!meta) {
+        new import_obsidian.Notice("No timeline settings found. Recreate the timeline with this plugin version to enable date range editing.");
+        return;
+      }
+      new DateRangeModal(this.app, meta, async (next) => {
+        const topLeftX = ctx.bgNode.x;
+        const topLeftY = ctx.bgNode.y;
+        await this.rebuildTimelineSvg(canvasFile, ctx, next);
+        new import_obsidian.Notice(`Timeline date range updated (background top-left kept at ${Math.round(topLeftX)}, ${Math.round(topLeftY)}).`);
+      }).open();
+    } catch (e) {
+      new import_obsidian.Notice(e instanceof Error ? e.message : "Could not edit date range.");
+    }
+  }
   async openCropModal(canvasFile) {
     try {
       const data = await this.readCanvas(canvasFile);
@@ -332,8 +360,16 @@ class TimelineCanvasPlugin extends import_obsidian.Plugin {
     this.applyBackgroundDomState();
     new import_obsidian.Notice(`Timeline widened to ${width}px (legacy SVG \u2014 recreate timeline to preserve headers when widening).`);
   }
-  /** Fully regenerate the SVG; keep background top-left fixed so cards stay put. */
+  /**
+   * Fully regenerate the SVG from (possibly edited) settings — used for widening,
+   * column/title edits, and date-range edits alike. The background's top-left
+   * corner (bgNode.x/y) is captured up front and re-applied after regeneration,
+   * so existing Canvas cards never shift regardless of what changed (width,
+   * height from more/fewer increments, columns, etc.).
+   */
   async rebuildTimelineSvg(canvasFile, ctx, settings) {
+    const topLeftX = ctx.bgNode.x;
+    const topLeftY = ctx.bgNode.y;
     const start = parseLocalDate(settings.start);
     const end = parseLocalDate(settings.end);
     if (!start || !end || end <= start) {
@@ -359,6 +395,8 @@ class TimelineCanvasPlugin extends import_obsidian.Plugin {
     const imageHeight = Math.max(600, intervalCount * settings.pixelsPerStep + 220 + headerExtra);
     ctx.bgNode.width = settings.timelineWidth;
     ctx.bgNode.height = imageHeight;
+    ctx.bgNode.x = topLeftX;
+    ctx.bgNode.y = topLeftY;
     ctx.bgNode.timelineSettings = serializeTimelineSettings(settings);
     markAsTimelineBackground(ctx.bgNode, this.settings.lockBackground);
     if (this.settings.keepBackgroundAtBack) sendNodeToBack(ctx.data, ctx.bgNode);
@@ -739,6 +777,58 @@ class ColumnsModal extends import_obsidian.Modal {
         this.settings.columnTitles[idx] = v;
       }));
     }
+  }
+  onClose() {
+    this.contentEl.empty();
+  }
+}
+class DateRangeModal extends import_obsidian.Modal {
+  constructor(app, settings, onSubmit) {
+    super(app);
+    __publicField(this, "settings");
+    __publicField(this, "onSubmit");
+    this.settings = { ...settings };
+    this.onSubmit = onSubmit;
+  }
+  onOpen() {
+    this.modalEl.addClass("timeline-canvas-modal");
+    this.titleEl.setText("Edit timeline date range");
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.createEl("p", {
+      text: "Change the start and/or end date of this timeline. The background is regenerated with all current customizations (increment, columns, title, colors, etc.) applied to the new range. The background's top-left corner stays exactly where it is, so existing Canvas cards are not moved.",
+      cls: "timeline-help"
+    });
+    new import_obsidian.Setting(contentEl).setName("Start date/time").addText((t) => t.setValue(this.settings.start).onChange((v) => {
+      this.settings.start = v;
+    }));
+    new import_obsidian.Setting(contentEl).setName("End date/time").addText((t) => t.setValue(this.settings.end).onChange((v) => {
+      this.settings.end = v;
+    }));
+    const incrementLabel = this.settings.increment === "custom" ? `Custom (${this.settings.customName || "Period"})` : `${this.settings.increment}, every ${this.settings.step || 1}`;
+    contentEl.createEl("div", {
+      text: `Increment: ${incrementLabel}. This command only changes the date range \u2014 to change the increment type or size, recreate the timeline instead.`,
+      cls: "timeline-custom-help"
+    });
+    if (this.settings.increment === "custom") {
+      new import_obsidian.Setting(contentEl).setName("Number of occurrences").setDesc("How many equally spaced custom increments should appear across the new date range.").addText((t) => t.setValue(String(this.settings.customCount)).onChange((v) => {
+        this.settings.customCount = Math.max(1, Math.floor(Number(v)) || 1);
+      }));
+    }
+    new import_obsidian.Setting(contentEl).addButton((b) => b.setButtonText("Apply").setCta().onClick(() => {
+      const start = parseLocalDate(this.settings.start);
+      const end = parseLocalDate(this.settings.end);
+      if (!start || !end) {
+        new import_obsidian.Notice("Enter valid dates in YYYY-MM-DD format (optionally with a time).");
+        return;
+      }
+      if (end <= start) {
+        new import_obsidian.Notice("Timeline end must be after the start.");
+        return;
+      }
+      this.close();
+      this.onSubmit({ ...this.settings });
+    })).addButton((b) => b.setButtonText("Cancel").onClick(() => this.close()));
   }
   onClose() {
     this.contentEl.empty();
