@@ -99,6 +99,16 @@ Choose **Custom** when the axis is conceptual rather than calendar-based:
 
 Example: start `2025-01-01`, end `2025-12-31`, name `Semester`, count `4` → four labels (*Semester 1* … *Semester 4*) spaced evenly between the year boundaries.
 
+### Sections (skipped time)
+
+Use multiple sections when you care about disconnected spans of time:
+
+- Example: Section 1 `2000-01-01` → `2001-01-01`, Section 2 `2003-01-01` → `2004-01-01`
+- Between sections, the SVG inserts a fixed-height gap (default = your increment spacing) with a zig-zag break and a short “omitted” label
+- Gaps are **not** proportional to calendar time — that is the point of skipping empty years
+
+You can change sections later with **Edit timeline sections** (see Command palette). Cards that still fall on remaining time are shifted to keep date alignment. Cards whose time was removed are moved **outside** the background so they are easy to spot and need manual attention.
+
 ### Title and columns
 
 | Option | Purpose |
@@ -133,20 +143,35 @@ Obsidian draws Canvas nodes in array order (first = back). The plugin marks the 
 
 Obsidian does not lock individual cards natively; lock here is the plugin’s way to make the background non-interactive while you work.
 
+### Editing after creation
+
+Most structural edits regenerate the SVG in place. The background’s **top-left** stays fixed so existing cards keep their canvas coordinates unless the command intentionally repositions them (sections / date-range remapping).
+
+| Situation | What happens to cards |
+|-----------|------------------------|
+| **Widen** | Not moved — only more room on the right |
+| **Columns / title** | Not moved — grid and headers update |
+| **Date range** | Remapped by date; collapses to one continuous section |
+| **Sections** | Remapped by date across the new layout |
+| **Orphaned time** (card’s date no longer on the timeline) | Card is moved **outside** the nearest left/right edge of the background; a notice reports how many need manual attention |
+| **Crop** | All nodes shift so content sits near the origin; background frame is resized |
+
+After these commands, open canvas tabs reload so the new SVG appears without closing the tab by hand.
+
 ### Commands (command palette)
 
 Open a timeline `.canvas` file first (most of these only appear when a canvas is active):
 
-| Command | What it does |
-|---------|----------------|
-| **Create timeline canvas** | Open the create dialog (also on the ribbon) |
-| **Widen timeline background** | Regenerate a wider SVG; **top-left stays fixed** so existing cards don’t shift, Only more room to the right is added.|
-| **Edit timeline columns and title** | Change title, column count, and column headers; regenerates the SVG in place |
-| **Crop timeline canvas to content** | Show content bounds, set a buffer, shift nodes to the origin, and resize the background (useful before PDF/export) |
-| **Send timeline background to back** | Put the SVG at the bottom of the stack |
-| **Toggle lock timeline background** | Lock or unlock the background for the current canvas |
-
-After widen or column edits, the open canvas reloads so the new SVG appears without manually closing the tab.
+| Command | When | What it does |
+|---------|------|----------------|
+| **Create timeline canvas** | Anytime | Opens the create dialog (also available from the calendar ribbon icon) |
+| **Widen timeline background** | Canvas active | Regenerates a wider SVG. Top-left stays fixed; only width grows to the right. Cards are not moved. |
+| **Edit timeline columns and title** | Canvas active | Change title, column count, column headers, and optionally width. SVG regenerates; cards stay put. |
+| **Edit timeline date range** | Canvas active | Change overall start and/or end. Becomes a **single continuous section**. Cards are remapped by date. Orphans are parked outside the background. |
+| **Edit timeline sections** | Canvas active | Add/remove sections, edit each range, set gap size. Cards are remapped by date. Orphans are parked outside the background with a notice. |
+| **Crop timeline canvas to content** | Canvas active | Show content bounds, choose a buffer, shift nodes toward the origin, and resize the background (useful before export). |
+| **Send timeline background to back** | Canvas active | Put the SVG node at the bottom of the stack. |
+| **Toggle lock timeline background** | Canvas active | Lock or unlock the background for the current canvas (non-clickable when locked). |
 
 ---
 
@@ -165,12 +190,14 @@ After widen or column edits, the open canvas reloads so the new SVG appears with
 
 ## Tips
 
-1. **Start wider than you think** or create narrow and **Widen** later; the origin stays put.  
+1. **Start wider than you think**, or create narrow and **Widen** later — the origin stays put.  
 2. **Columns for comparison**. Even two columns (*Context* | *Detail*) make parallel stories easier to read.  
-3. **Lock the background** while placing cards; unlock only when you need to move or resize the SVG node.  
-4. **Crop before export** to trim empty margin for a cleaner PDF or screenshot.  
-5. **Metadata** settings are stored with the SVG (and a small `.timeline-meta.json` sidecar) so columns/title/width can be edited later. Prefer creating timelines with the current plugin version for full edit support.  
-6. **Zoom freely**. The timeline is SVG, so labels stay sharp at any Canvas zoom level.
+3. **Sections for focus**. Skip empty decades instead of scrolling through blank space; edit sections later if you discover events in a gap.  
+4. **Lock the background** while placing cards; unlock only when you need to move or resize the SVG node.  
+5. **Crop before export** to trim empty margin for a cleaner PDF or screenshot.  
+6. **Metadata** is stored on the SVG and in a `.timeline-meta.json` sidecar so columns, title, width, date range, and sections can be edited later. Prefer timelines created with the current plugin version for full edit support.  
+7. **Orphan notices** after section or date-range edits mean those cards no longer sit on valid time — they were moved off the side on purpose so you can place them again.  
+8. **Zoom freely**. The timeline is SVG, so labels stay sharp at any Canvas zoom level.
 
 ---
 
@@ -196,7 +223,7 @@ Requires Obsidian **1.5.0** or newer.
 | File | Role |
 |------|------|
 | `Timeline YYYY-MM-DD–YYYY-MM-DD.canvas` | Canvas board with the SVG as a file node |
-| `Timeline YYYY-MM-DD–YYYY-MM-DD.svg` | Timeline artwork (title, columns, date grid) |
-| `Timeline … .timeline-meta.json` | Sidecar settings for later column/title/width edits |
+| `Timeline YYYY-MM-DD–YYYY-MM-DD.svg` | Timeline artwork (title, columns, sections/gaps, date grid) |
+| `Timeline … .timeline-meta.json` | Sidecar settings for later edits (columns, title, width, dates, sections) |
 
 You can rename files in the vault; keep the canvas node pointing at the correct SVG if you move them by hand.
